@@ -1,15 +1,14 @@
 'use client';
-import React, { useEffect, useMemo, useState } from "react";
-import type { LatLngExpression, LeafletMouseEvent } from "leaflet";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import type { LatLng, LatLngBounds, LatLngExpression, LeafletMouseEvent } from "leaflet";
 import styles from "./LeafletGeorefMap.module.scss";
 import Control from 'react-leaflet-custom-control'
 import "leaflet/dist/leaflet.css";
 import "leaflet-defaulticon-compatibility"
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css"
-
-// We import react-leaflet types dynamically at runtime (component exported as NoSSR below)
-import { MapContainer, useMapEvents, TileLayer, CircleMarker, Polyline } from "react-leaflet";
+import { MapContainer, useMapEvents, TileLayer, CircleMarker, Polyline, Rectangle, useMap } from "react-leaflet";
 import { ImageItem } from "@/types/ImageItem";
+import L from "leaflet";
 
 type Props = {
     images: ImageItem[];
@@ -106,6 +105,11 @@ export default function LeafletGeorefMap(props: Props) {
     const [panelVisibility,setPanelVisibility] = useState(false);
     const [relocating,setRelocating] = useState(false);
 
+    const [bounds, setBounds] = useState<LatLngBounds|null>(null);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const [startLatLng, setStartLatLng] = useState<LatLng|null>(null);
+    const shiftPressed = useRef(false);
+
     useEffect(() => {
         setImages(prev =>
             prev.map(img =>
@@ -125,6 +129,18 @@ export default function LeafletGeorefMap(props: Props) {
     const zoom = props.zoom ?? 13;
 
     const georefPositions: LatLngExpression[] = computed.filter((i) => i.coords).map((i) => [i.coords!.lat, i.coords!.lng]);
+
+    function fixMarkers(){
+        let estimatedFix = computed.filter(i=>i.estimated ? bounds?.contains([i.estCoords?.lat as number, i.estCoords?.lng as number]) : false)
+        estimatedFix.forEach(i=>{
+            fetch('/api',{method: 'POST', body: JSON.stringify({...i, coords: { lat: i.estCoords?.lat, lng: i.estCoords?.lng }})});
+        });
+        console.log(estimatedFix);
+        console.log(images);
+        setImages(prev =>
+            prev.map(img => estimatedFix.find(i=>i.name===img.name && i.path===img.path) ?? img)
+        );
+    }
 
     // https://dev.to/digitalpollution/a-friendly-guide-to-using-react-leaflet-with-react-42k7
     const MapEventsHandler = ( { handleMapClick } : { handleMapClick: (e: LeafletMouseEvent)=>void }) => {
@@ -146,9 +162,53 @@ export default function LeafletGeorefMap(props: Props) {
         }
     };
 
+    function RectangleDrawer() {
+        const map = useMap();
+
+        useMapEvents({
+            keydown(e) {
+                if (e.originalEvent.key === "Shift") {
+                    shiftPressed.current = true;
+                }
+            },
+            keyup(e) {
+                if (e.originalEvent.key === "Shift") {
+                    shiftPressed.current = false;
+                }
+            },
+            mousedown(e) {
+                if (shiftPressed.current) {
+                    setIsDrawing(true);
+                    setStartLatLng(e.latlng);
+                    setBounds(null);
+                    map.dragging.disable();
+                }
+            },
+            mousemove(e) {
+                if (isDrawing && startLatLng) {
+                    const newBounds = L.latLngBounds(startLatLng, e.latlng);
+                    setBounds(newBounds);
+                }
+            },
+            mouseup(e) {
+                if (isDrawing && startLatLng) {
+                    const finalBounds = L.latLngBounds(startLatLng, e.latlng);
+                    setBounds(finalBounds);
+                }
+                setIsDrawing(false);
+                setStartLatLng(null);
+                map.dragging.enable();
+            },
+        });
+
+        return bounds ? (
+            <Rectangle bounds={bounds} pathOptions={{ color: "purple" }} />
+        ) : null;
+    }
+
     return (
         <div className={styles.mapcontainer}>
-            <MapContainer center={center} zoom={zoom} style={{ width: "100%", height: "100%" }}>
+            <MapContainer center={center} zoom={zoom} style={{ width: "100%", height: "100%" }} boxZoom={false}>
                 <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -188,19 +248,34 @@ export default function LeafletGeorefMap(props: Props) {
 
                 <MapEventsHandler handleMapClick={handleMapClick} />
 
+                <RectangleDrawer />
+
                 <Control position="topright">
-                    <div className={styles.infopanel} style={{ display: panelVisibility ? 'flex' : 'none' }}>
-                        <div className={styles.panelimageholder}>
+                    <div className={styles.infopanel}>
+                        <div style={{ display: panelVisibility ? 'none' : 'block' }}>
+                            <h1>GeoPic</h1><br/>
+                            <h2>Tutorial</h2><br/>
+                            <ul>
+                                <li>Paste all images into the "public" directory. Reload the page.</li>
+                                <li>Click any marker to view the image details.</li>
+                                <li>Click "Relocate" and press somewhere on the map to relocate the GPS posiion of the image.</li>
+                                <li>Click "Remove coordinates" to remove the coordinates of an image.</li>
+                                <li>Hold "Shift" and click/drag your mouse to make a selection. Options appear at the bottom of this window.</li>
+                                <li>Click while holdng "Shift" to remove the selection.</li>
+                            </ul>
+                        </div>
+                        <div className={styles.panelimageholder} style={{ display: panelVisibility ? 'block' : 'none' }}>
                             <img src={currentImage.path + currentImage.name == '' ? undefined : currentImage.path + currentImage.name} className={styles.panelimage} />
                         </div>
-                        <div className={styles.paneltext}>
+                        <div className={styles.paneltext} style={{ display: panelVisibility ? 'block' : 'none' }}>
                             <div>Name: {currentImage.name}</div>
                             <div>Path: {currentImage.path}</div>
                             <div>Time: {new Date(currentImage.timestamp).toLocaleString()}</div>
                             {currentImage.coords && <div>Coords: {currentImage.coords.lat.toFixed(6)}, {currentImage.coords.lng.toFixed(6)}</div>}
                         </div>
-                        <div>
-                            <button onClick={()=>setRelocating(true)} className={styles.panelbutton}>Relocate</button>
+                        <div style={{ display: panelVisibility ? 'block' : 'none' }}>
+                            <button onClick={()=>setRelocating(true)} className={styles.panelbutton}>Relocate current marker</button>
+                            <button onClick={()=>fixMarkers()} className={styles.panelbutton}>Fix selected markers</button>
                         </div>
                     </div>
                 </Control>

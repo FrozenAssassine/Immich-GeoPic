@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
 
                 results.push({
                     name: entry.name,
-                    path: "/" + subPath.replace(/\\/g, "/").replace(entry.name, "") + "/",
+                    path: ("/" + subPath.replace(/\\/g, "/").replace(entry.name, "") + "/").replace('//','/'),
                     timestamp,
                     coords,
                 });
