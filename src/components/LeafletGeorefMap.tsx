@@ -78,7 +78,7 @@ function computeEstimatedPositions(items: ImageItem[]): Array<ImageItem & { esti
             const ratio = (tCur - tPrev) / (tNext - tPrev);
             const est = interpolateCoords(out[prevIndex].coords as { lat: number; lng: number }, out[nextIndex].coords as { lat: number; lng: number }, ratio);
             out[i].estimated = true;
-            out[i].estCoords = { lat: est.lat + randomOffset(), lng: est.lng + randomOffset() };
+            out[i].estCoords = { lat: est.lat, lng: est.lng };
         } else if (prevIndex !== -1) {
             // Only previous available: assign previous coords (reasonable fallback)
             out[i].estimated = true;

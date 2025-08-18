@@ -19,7 +19,13 @@ export default function Home() {
     ),[]);
     return (
         <div>
-            <Map images={imgs} />
+            {imgs.length === 0 ? (
+                <div className={styles.loadingbox}>
+                    <p className={styles.loadinginfo}>Loading images...</p>
+                </div>
+            ) : (
+                <Map images={imgs} />
+            )}
         </div>
     );
 }
