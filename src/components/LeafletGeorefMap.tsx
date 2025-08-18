@@ -37,6 +37,10 @@ function interpolateCoords(a: { lat: number; lng: number }, b: { lat: number; ln
     };
 }
 
+function randomOffset(scale = 0.05) {
+    return (Math.random() - 0.5) * scale;
+}
+
 function computeEstimatedPositions(items: ImageItem[]): Array<ImageItem & { estimated?: boolean; estCoords?: { lat: number; lng: number } }> {
     if (!Array.isArray(items)) return [];
 
@@ -44,12 +48,6 @@ function computeEstimatedPositions(items: ImageItem[]): Array<ImageItem & { esti
     const sorted = items
         .map((it) => ({ ...it }))
         .sort((a, b) => parseTimeMs(a.timestamp) - parseTimeMs(b.timestamp));
-
-    // collect indices of georeferenced (greens)
-    const geoIndices: number[] = [];
-    for (let i = 0; i < sorted.length; i++) {
-        if (sorted[i].coords) geoIndices.push(i);
-    }
 
     const out: Array<ImageItem & { estimated?: boolean; estCoords?: { lat: number; lng: number } }> = sorted.map((it) => ({ ...it }));
 
@@ -80,18 +78,21 @@ function computeEstimatedPositions(items: ImageItem[]): Array<ImageItem & { esti
             const ratio = (tCur - tPrev) / (tNext - tPrev);
             const est = interpolateCoords(out[prevIndex].coords as { lat: number; lng: number }, out[nextIndex].coords as { lat: number; lng: number }, ratio);
             out[i].estimated = true;
-            out[i].estCoords = est;
+            out[i].estCoords = { lat: est.lat + randomOffset(), lng: est.lng + randomOffset() };
         } else if (prevIndex !== -1) {
             // Only previous available: assign previous coords (reasonable fallback)
             out[i].estimated = true;
-            out[i].estCoords = { ... (out[prevIndex].coords as { lat: number; lng: number }) };
+            const base = out[prevIndex].coords as { lat: number; lng: number };
+            out[i].estCoords = { lat: base.lat + randomOffset(), lng: base.lng + randomOffset() };
         } else if (nextIndex !== -1) {
             // Only next available: assign next coords
             out[i].estimated = true;
-            out[i].estCoords = { ... (out[nextIndex].coords as { lat: number; lng: number }) };
+            const base = out[nextIndex].coords as { lat: number; lng: number };
+            out[i].estCoords = { lat: base.lat + randomOffset(), lng: base.lng + randomOffset() };
         } else {
-            // no georef at all -> leave undefined
-            out[i].estimated = false;
+            // no georef at all -> place around 0|0 with random offset
+            out[i].estimated = true;
+            out[i].estCoords = { lat: randomOffset(0.2), lng: randomOffset(0.2) };
         }
     }
 
