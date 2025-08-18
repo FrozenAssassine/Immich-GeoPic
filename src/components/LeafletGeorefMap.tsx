@@ -8,17 +8,8 @@ import "leaflet-defaulticon-compatibility"
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css"
 
 // We import react-leaflet types dynamically at runtime (component exported as NoSSR below)
-import { MapContainer, useMapEvents, TileLayer, Popup, CircleMarker, Polyline } from "react-leaflet";
-
-export type ImageItem = {
-    name: string;
-    path: string;
-    timestamp: string; // ISO 8601 or any format parsable by Date
-    coords?: {
-        lat: number;
-        lng: number;
-    };
-};
+import { MapContainer, useMapEvents, TileLayer, CircleMarker, Polyline } from "react-leaflet";
+import { ImageItem } from "@/types/ImageItem";
 
 type Props = {
     images: ImageItem[];
@@ -107,18 +98,8 @@ function computeEstimatedPositions(items: ImageItem[]): Array<ImageItem & { esti
     return out;
 }
 
-function formatPopupContent(it: ImageItem & { estimated?: boolean; estCoords?: { lat: number; lng: number } }) {
-    const parts: string[] = [];
-    parts.push(`<b>${it.name}</b>`);
-    parts.push(`<div>${new Date(it.timestamp).toLocaleString()}</div>`);
-    if (it.coords) parts.push(`<div>Coords: ${it.coords.lat.toFixed(6)}, ${it.coords.lng.toFixed(6)}</div>`);
-    else if (it.estimated && it.estCoords) parts.push(`<div>estimated: ${it.estCoords.lat.toFixed(6)}, ${it.estCoords.lng.toFixed(6)}</div>`);
-    else parts.push(`<div>no coords</div>`);
-    return parts.join("");
-}
-
 export default function LeafletGeorefMap(props: Props) {
-    const [currentImage,setCurrentImage] = useState<ImageItem>(props.images[0]);
+    const [currentImage,setCurrentImage] = useState<ImageItem>({ name: '', path: '', timestamp: '', coords: undefined });
     const [images, setImages] = useState<ImageItem[]>(props.images);
     const computed = useMemo(() => computeEstimatedPositions(images), [images]);
     const [panelVisibility,setPanelVisibility] = useState(false);
@@ -160,6 +141,7 @@ export default function LeafletGeorefMap(props: Props) {
                 coords: { lat, lng }
             }));
             setRelocating(false);
+            fetch('/api',{method: 'POST', body: JSON.stringify({...currentImage,coords: { lat, lng }})});
         }
     };
 
@@ -208,7 +190,7 @@ export default function LeafletGeorefMap(props: Props) {
                 <Control position="topright">
                     <div className={styles.infopanel} style={{ display: panelVisibility ? 'flex' : 'none' }}>
                         <div className={styles.panelimageholder}>
-                            <img src={currentImage.path + currentImage.name} className={styles.panelimage} />
+                            <img src={currentImage.path + currentImage.name == '' ? undefined : currentImage.path + currentImage.name} className={styles.panelimage} />
                         </div>
                         <div className={styles.paneltext}>
                             <div>Name: {currentImage.name}</div>

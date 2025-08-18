@@ -1,15 +1,15 @@
 'use client';
-import LeafletGeorefMap, { ImageItem } from "@/components/LeafletGeorefMap";
+import LeafletGeorefMap from "@/components/LeafletGeorefMap";
 import styles from "./page.module.scss";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { ImageItem } from "@/types/ImageItem";
 
 export default function Home() {
-    const sample: ImageItem[] = [
-        { name: 'PXL_20250711_201855449.jpg',path:"/", timestamp: '2025-08-17T13:00:00Z', coords: { lat: 52.5208, lng: 13.4095 } },
-        { name: '_DSC3432.jpg',path:"/", timestamp: '2025-08-17T14:00:00Z' },
-        { name: 'PXL_20250711_093617121.jpg',path:"/", timestamp: '2025-08-17T15:00:00Z', coords: { lat: 52.5300, lng: 13.4200 } },
-    ];
+    const [imgs,setImgs] = useState<ImageItem[]>([]);
+    useEffect(()=>{
+        fetch('/api').then(res => res.json()).then(data=>setImgs(data.images));
+    },[]);
     const Map = useMemo(()=>dynamic(
         ()  => import("@/components/LeafletGeorefMap"),
         {
@@ -19,7 +19,7 @@ export default function Home() {
     ),[]);
     return (
         <div>
-            <Map images={sample} />
+            <Map images={imgs} />
         </div>
     );
 }
