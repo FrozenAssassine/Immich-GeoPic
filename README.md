@@ -1,6 +1,6 @@
 # GeoPic
 
-## This project works but isn't finished yet. Many features need to be improved. You're welcome to contribute.
+## This project is a work in progress. Many features need to be improved. You're welcome to contribute.
 
 ## Requirements
 - Node.js installation
