@@ -156,18 +156,25 @@ export async function searchAssets(
   }
 ): Promise<{ items: ImmichAsset[]; total: number }> {
   const baseUrl = getImmichUrl();
+  const pageSize = Math.min(params.size || 1000, 1000);
   const bodyPayload: Record<string, unknown> = {
     type: "IMAGE",
     withExif: true,
-    size: params.size || 500,
+    size: pageSize,
     page: params.page || 1,
   };
 
   if (params.startDate) {
-    bodyPayload.createdAfter = new Date(params.startDate).toISOString();
+    const isoString = params.startDate.includes("T")
+      ? new Date(params.startDate).toISOString()
+      : new Date(`${params.startDate}T00:00:00.000Z`).toISOString();
+    bodyPayload.takenAfter = isoString;
   }
   if (params.endDate) {
-    bodyPayload.createdBefore = new Date(params.endDate).toISOString();
+    const isoString = params.endDate.includes("T")
+      ? new Date(params.endDate).toISOString()
+      : new Date(`${params.endDate}T23:59:59.999Z`).toISOString();
+    bodyPayload.takenBefore = isoString;
   }
 
   const res = await fetch(`${baseUrl}/api/search/metadata`, {
@@ -199,6 +206,57 @@ export async function searchAssets(
   } else if (Array.isArray(data)) {
     items = data;
     total = data.length;
+  }
+
+  // If no explicit page was requested and more items exist, fetch all remaining pages in parallel batches
+  const maxAssets = 50000;
+  const totalPages = Math.min(
+    Math.ceil(total / pageSize),
+    Math.ceil(maxAssets / pageSize)
+  );
+
+  if (!params.page && totalPages > 1) {
+    const remainingPages: number[] = [];
+    for (let p = 2; p <= totalPages; p++) {
+      remainingPages.push(p);
+    }
+
+    // Fetch remaining pages in concurrent batches (5 parallel requests at a time)
+    const concurrency = 5;
+    for (let i = 0; i < remainingPages.length; i += concurrency) {
+      const pageBatch = remainingPages.slice(i, i + concurrency);
+      const batchResults = await Promise.all(
+        pageBatch.map(async (p) => {
+          try {
+            const pageRes = await fetch(`${baseUrl}/api/search/metadata`, {
+              method: "POST",
+              headers: {
+                ...getAuthHeaders(auth),
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ ...bodyPayload, page: p }),
+            });
+            if (!pageRes.ok) return [];
+            const pageData = await pageRes.json();
+            if (pageData?.assets?.items && Array.isArray(pageData.assets.items)) {
+              return pageData.assets.items as ImmichAsset[];
+            } else if (pageData?.items && Array.isArray(pageData.items)) {
+              return pageData.items as ImmichAsset[];
+            } else if (Array.isArray(pageData)) {
+              return pageData as ImmichAsset[];
+            }
+            return [];
+          } catch (err) {
+            console.warn(`[searchAssets] Failed to fetch page ${p}:`, err);
+            return [];
+          }
+        })
+      );
+
+      for (const batchItems of batchResults) {
+        items.push(...batchItems);
+      }
+    }
   }
 
   return { items, total };

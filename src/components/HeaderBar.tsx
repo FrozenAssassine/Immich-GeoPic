@@ -124,15 +124,15 @@ export default function HeaderBar({
         <div className={styles.counters}>
           <div className={`${styles.badge} ${styles.total}`} title="Total loaded photos">
             <Layers size={13} />
-            <span>{totalCount}</span>
+            <span>{totalCount.toLocaleString()}</span>
           </div>
           <div className={`${styles.badge} ${styles.geotagged}`} title="Photos with verified GPS">
             <CheckCircle2 size={13} />
-            <span>{geotaggedCount}</span>
+            <span>{geotaggedCount.toLocaleString()}</span>
           </div>
           <div className={`${styles.badge} ${styles.estimated}`} title="Photos with estimated coordinates">
             <AlertCircle size={13} />
-            <span>{estimatedCount}</span>
+            <span>{estimatedCount.toLocaleString()}</span>
           </div>
         </div>
 

@@ -112,12 +112,16 @@ export default function Home() {
 
   // Fetch photos for the selected date range
   const loadImages = useCallback(
-    async (start?: string, end?: string) => {
+    async (start?: string, end?: string, isAll?: boolean) => {
       setIsLoading(true);
       try {
         const query = new URLSearchParams();
-        if (start) query.set("startDate", start);
-        if (end) query.set("endDate", end);
+        if (isAll) {
+          query.set("all", "true");
+        } else {
+          if (start) query.set("startDate", start);
+          if (end) query.set("endDate", end);
+        }
 
         const res = await authFetch(`/api/images?${query.toString()}`);
         if (!res.ok) {
@@ -147,9 +151,9 @@ export default function Home() {
   // When authenticated, trigger initial image load
   useEffect(() => {
     if (isAuthenticated) {
-      loadImages(startDate, endDate);
+      loadImages(startDate, endDate, timespanPreset === "all");
     }
-  }, [isAuthenticated, loadImages, startDate, endDate]);
+  }, [isAuthenticated, loadImages]);
 
   const handleTimespanChange = (
     preset: TimespanPreset,
@@ -166,7 +170,7 @@ export default function Home() {
       const endStr = formatDateInput(now);
       setStartDate(startStr);
       setEndDate(endStr);
-      loadImages(startStr, endStr);
+      loadImages(startStr, endStr, false);
     } else if (preset === "3m") {
       const s = new Date();
       s.setMonth(now.getMonth() - 3);
@@ -174,7 +178,7 @@ export default function Home() {
       const endStr = formatDateInput(now);
       setStartDate(startStr);
       setEndDate(endStr);
-      loadImages(startStr, endStr);
+      loadImages(startStr, endStr, false);
     } else if (preset === "6m") {
       const s = new Date();
       s.setMonth(now.getMonth() - 6);
@@ -182,7 +186,7 @@ export default function Home() {
       const endStr = formatDateInput(now);
       setStartDate(startStr);
       setEndDate(endStr);
-      loadImages(startStr, endStr);
+      loadImages(startStr, endStr, false);
     } else if (preset === "1y") {
       const s = new Date();
       s.setFullYear(now.getFullYear() - 1);
@@ -190,17 +194,17 @@ export default function Home() {
       const endStr = formatDateInput(now);
       setStartDate(startStr);
       setEndDate(endStr);
-      loadImages(startStr, endStr);
+      loadImages(startStr, endStr, false);
     } else if (preset === "all") {
       setStartDate("");
       setEndDate("");
-      loadImages("", "");
+      loadImages("", "", true);
     } else if (preset === "custom") {
-      const startStr = customStart ?? startDate;
-      const endStr = customEnd ?? endDate;
+      const startStr = customStart ?? (startDate || defaultDates.startDate);
+      const endStr = customEnd ?? (endDate || defaultDates.endDate);
       setStartDate(startStr);
       setEndDate(endStr);
-      loadImages(startStr, endStr);
+      loadImages(startStr, endStr, false);
     }
   };
 
@@ -267,7 +271,7 @@ export default function Home() {
         geotaggedCount={geotaggedCount}
         estimatedCount={estimatedCount}
         isLoading={isLoading}
-        onRefresh={() => loadImages(startDate, endDate)}
+        onRefresh={() => loadImages(startDate, endDate, timespanPreset === "all")}
       />
 
       {/* Main Map Content */}

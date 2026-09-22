@@ -11,24 +11,30 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
+    const isAll = searchParams.get("all") === "true";
     const startDateParam = searchParams.get("startDate");
     const endDateParam = searchParams.get("endDate");
 
-    // Default to past 6 months if unspecified
-    let startDate = startDateParam;
-    let endDate = endDateParam;
+    let startDate: string | undefined = undefined;
+    let endDate: string | undefined = undefined;
 
-    if (!startDate && !endDate) {
-      const now = new Date();
-      const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(now.getMonth() - 6);
-      startDate = sixMonthsAgo.toISOString();
-      endDate = now.toISOString();
+    if (!isAll) {
+      if (startDateParam || endDateParam) {
+        startDate = startDateParam || undefined;
+        endDate = endDateParam || undefined;
+      } else if (startDateParam === null && endDateParam === null) {
+        // Default to past 6 months only if completely unspecified
+        const now = new Date();
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(now.getMonth() - 6);
+        startDate = sixMonthsAgo.toISOString();
+        endDate = now.toISOString();
+      }
     }
 
     const { items, total } = await searchAssets(ctx.auth, {
-      startDate: startDate || undefined,
-      endDate: endDate || undefined,
+      startDate,
+      endDate,
       size: 1000,
     });
 

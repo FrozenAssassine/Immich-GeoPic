@@ -72,30 +72,38 @@ function randomOffset(scale = 0.001) {
 function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
   if (!Array.isArray(items) || items.length === 0) return [];
 
-  const sorted = items
-    .map((it) => ({ ...it }))
+  const n = items.length;
+  // Sort items chronologically
+  const out: EstimatedImageItem[] = items
+    .slice()
     .sort((a, b) => parseTimeMs(a.timestamp) - parseTimeMs(b.timestamp));
 
-  const out: EstimatedImageItem[] = sorted.map((it) => ({ ...it }));
+  // Pass 1: Forward scan - find previous geotagged photo index for each photo
+  const prevGeoIndex = new Int32Array(n);
+  let lastGeo = -1;
+  for (let i = 0; i < n; i++) {
+    prevGeoIndex[i] = lastGeo;
+    if (out[i].coords) {
+      lastGeo = i;
+    }
+  }
 
-  for (let i = 0; i < out.length; i++) {
+  // Pass 2: Backward scan - find next geotagged photo index for each photo
+  const nextGeoIndex = new Int32Array(n);
+  lastGeo = -1;
+  for (let i = n - 1; i >= 0; i--) {
+    nextGeoIndex[i] = lastGeo;
+    if (out[i].coords) {
+      lastGeo = i;
+    }
+  }
+
+  // Pass 3: Estimate unlocated photo coordinates in O(1) per photo
+  for (let i = 0; i < n; i++) {
     if (out[i].coords) continue;
 
-    let prevIndex = -1;
-    for (let j = i - 1; j >= 0; j--) {
-      if (out[j].coords) {
-        prevIndex = j;
-        break;
-      }
-    }
-
-    let nextIndex = -1;
-    for (let j = i + 1; j < out.length; j++) {
-      if (out[j].coords) {
-        nextIndex = j;
-        break;
-      }
-    }
+    const prevIndex = prevGeoIndex[i];
+    const nextIndex = nextGeoIndex[i];
 
     if (prevIndex !== -1 && nextIndex !== -1) {
       const tPrev = parseTimeMs(out[prevIndex].timestamp);
@@ -377,9 +385,12 @@ export default function LeafletGeorefMap(props: Props) {
   }, [computed, props.center]);
 
   const georefPositions: LatLngExpression[] = useMemo(() => {
-    return computed
-      .filter((i) => i.coords)
-      .map((i) => [i.coords!.lat, i.coords!.lng]);
+    const pos: [number, number][] = [];
+    for (let i = 0; i < computed.length; i++) {
+      const c = computed[i].coords;
+      if (c) pos.push([c.lat, c.lng]);
+    }
+    return pos;
   }, [computed]);
 
   // Filter items within selection rectangle
@@ -527,10 +538,14 @@ export default function LeafletGeorefMap(props: Props) {
   }, [images]);
 
   const allCoords = useMemo(() => {
-    return computed
-      .map((i) => i.coords || i.estCoords)
-      .filter((c): c is { lat: number; lng: number } => !!c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng))
-      .map((c): [number, number] => [c.lat, c.lng]);
+    const coords: [number, number][] = [];
+    for (let i = 0; i < computed.length; i++) {
+      const c = computed[i].coords || computed[i].estCoords;
+      if (c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng)) {
+        coords.push([c.lat, c.lng]);
+      }
+    }
+    return coords;
   }, [computed]);
 
   return (
@@ -638,6 +653,7 @@ export default function LeafletGeorefMap(props: Props) {
         zoom={props.zoom ?? 13}
         className={styles.mapContainer}
         boxZoom={false}
+        preferCanvas={true}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -654,6 +670,7 @@ export default function LeafletGeorefMap(props: Props) {
               opacity: 0.7,
               dashArray: "4, 6",
             }}
+            smoothFactor={1.5}
           />
         )}
 
@@ -690,9 +707,11 @@ export default function LeafletGeorefMap(props: Props) {
                 },
               }}
             >
-              <Tooltip direction="top" offset={[0, -6]}>
-                <span>{it.name}</span>
-              </Tooltip>
+              {(computed.length <= 1500 || isSelected) && (
+                <Tooltip direction="top" offset={[0, -6]}>
+                  <span>{it.name}</span>
+                </Tooltip>
+              )}
             </CircleMarker>
           );
         })}
