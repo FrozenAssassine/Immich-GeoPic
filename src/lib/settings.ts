@@ -50,12 +50,32 @@ async function readSettings(): Promise<SettingsData> {
 
 async function writeSettings(data: SettingsData): Promise<void> {
   const dir = getDataDir();
-  await fs.mkdir(dir, { recursive: true });
   const filePath = getSettingsFilePath();
   const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
 
-  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
-  await fs.rename(tempPath, filePath);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
+    await fs.rename(tempPath, filePath);
+  } catch (err: unknown) {
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      // ignore
+    }
+
+    if (err && typeof err === "object" && "code" in err && err.code === "EACCES") {
+      console.error(
+        `[GeoPic Settings] Permission denied writing to data directory "${dir}". ` +
+        `Use a Docker named volume (e.g. "geopic-data:/app/data") or ensure the host mount is writable by UID 1001.`
+      );
+      throw new Error(
+        `Permission denied writing to "${dir}". Please ensure the volume is writable (e.g. use a Docker named volume "geopic-data:/app/data" in docker-compose.yml).`
+      );
+    }
+
+    throw err;
+  }
 }
 
 export async function getUserBaseMaps(userId?: string): Promise<{

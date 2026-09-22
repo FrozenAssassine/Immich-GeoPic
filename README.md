@@ -45,8 +45,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Persistent volume to store user settings, custom base-maps, and active selections
-      - ./geopic-data:/app/data
+      # Named volume for persistent base-map settings and user preferences
+      - geopic-data:/app/data
     environment:
       # URL to your Immich instance (include protocol and port if custom)
       - IMMICH_URL=http://immich-server:2283
@@ -54,10 +54,13 @@ services:
       # (Optional) Immich API Key.
       # If set, no user login is needed. If omitted, users sign in via email/password.
       - IMMICH_API_KEY=
+
+volumes:
+  geopic-data:
 ```
 
 > [!NOTE]
-> The `./geopic-data:/app/data` volume ensures custom base-maps and user settings persist across container updates, restarts, and re-logins.
+> The `geopic-data:/app/data` named volume ensures custom base-maps and user settings persist across container updates, restarts, and re-logins without requiring any host permission adjustments.
 
 Then run:
 ```bash

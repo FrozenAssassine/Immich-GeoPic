@@ -29,7 +29,7 @@ ENV HOSTNAME="0.0.0.0"
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Ensure persistent data directory exists and has correct ownership
+# Ensure persistent data directory exists and has correct ownership for named volume initialization
 RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
 # Copy public directory if exists

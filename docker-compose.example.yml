@@ -9,8 +9,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Persistent storage for application settings, active & custom base-maps
-      - ./geopic-data:/app/data
+      # Named volume for persistent base-map settings and user preferences
+      - geopic-data:/app/data
     environment:
       # URL to your Immich server (e.g. http://immich-server:2283 or public URL)
       - IMMICH_URL=http://immich-server:2283
@@ -19,3 +19,6 @@ services:
       # If provided, no user login is required (ideal for private network setups).
       # If omitted, users authenticate on the web UI using their Immich email & password.
       - IMMICH_API_KEY=
+
+volumes:
+  geopic-data:
