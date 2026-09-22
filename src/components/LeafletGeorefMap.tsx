@@ -37,6 +37,7 @@ type Props = {
   onImagesUpdate?: (images: ImageItem[]) => void;
   center?: LatLngExpression;
   zoom?: number;
+  sessionToken?: string | null;
 };
 
 type EstimatedImageItem = ImageItem & {
@@ -199,6 +200,19 @@ export default function LeafletGeorefMap(props: Props) {
     return selectedItemsInBounds.filter((i) => i.estimated && i.estCoords);
   }, [selectedItemsInBounds]);
 
+  const getAuthHeaders = () => {
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    const token =
+      props.sessionToken ||
+      (typeof window !== "undefined"
+        ? localStorage.getItem("geopic_session_token")
+        : null);
+    if (token) {
+      h["Authorization"] = `Bearer ${token}`;
+    }
+    return h;
+  };
+
   // Single marker relocation click
   const handleMapClick = async (e: LeafletMouseEvent) => {
     if (!isRelocating || !selectedImage) return;
@@ -210,7 +224,7 @@ export default function LeafletGeorefMap(props: Props) {
     try {
       await fetch(`/api/images/${selectedImage.id}/location`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ coords: { lat, lng } }),
       });
 
@@ -234,7 +248,7 @@ export default function LeafletGeorefMap(props: Props) {
       const coords = selectedImage.estCoords;
       await fetch(`/api/images/${selectedImage.id}/location`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ coords }),
       });
 
@@ -257,7 +271,7 @@ export default function LeafletGeorefMap(props: Props) {
     try {
       await fetch(`/api/images/${selectedImage.id}/location`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ coords: null }),
       });
 
@@ -285,7 +299,7 @@ export default function LeafletGeorefMap(props: Props) {
 
       await fetch("/api/images/bulk-location", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ updates }),
       });
 
@@ -568,7 +582,13 @@ export default function LeafletGeorefMap(props: Props) {
 
           <div className={styles.cardImageHolder}>
             <img
-              src={`/api/images/${selectedImage.id}/thumbnail?size=preview`}
+              src={`/api/images/${selectedImage.id}/thumbnail?size=preview${
+                props.sessionToken
+                  ? `&token=${encodeURIComponent(props.sessionToken)}`
+                  : typeof window !== "undefined" && localStorage.getItem("geopic_session_token")
+                  ? `&token=${encodeURIComponent(localStorage.getItem("geopic_session_token")!)}`
+                  : ""
+              }`}
               alt={selectedImage.name}
               className={styles.previewImage}
               loading="lazy"

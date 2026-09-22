@@ -24,16 +24,19 @@ export async function POST(req: NextRequest) {
     const { accessToken, user } = await loginToImmich(email, password);
     const sessionId = createSession(accessToken, user);
 
+    console.log(`[GeoPic Auth] Login successful for user: ${user.email} (session: ${sessionId.substring(0, 8)}...)`);
+
     const res = NextResponse.json({
       success: true,
       user,
+      token: sessionId,
     });
 
-    attachSessionCookie(res, sessionId);
+    attachSessionCookie(req, res, sessionId);
     return res;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Authentication failed";
-    console.error("Login error:", message);
+    console.error("[GeoPic Auth] Login failed:", message);
     return NextResponse.json({ error: message }, { status: 401 });
   }
 }

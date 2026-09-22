@@ -23,6 +23,7 @@ export type HeaderBarProps = {
     profileImagePath?: string | null;
   } | null;
   authMode: "apikey" | "login";
+  sessionToken?: string | null;
   onLogout: () => void;
   timespanPreset: TimespanPreset;
   startDate: string;
@@ -38,6 +39,7 @@ export type HeaderBarProps = {
 export default function HeaderBar({
   user,
   authMode,
+  sessionToken,
   onLogout,
   timespanPreset,
   startDate,
@@ -150,7 +152,7 @@ export default function HeaderBar({
         <div className={styles.userCard}>
           {user && !profileImgError ? (
             <img
-              src="/api/auth/profile-image"
+              src={`/api/auth/profile-image${sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : ""}`}
               alt={user.name}
               className={styles.avatar}
               onError={() => setProfileImgError(true)}

@@ -51,15 +51,33 @@ export async function loginToImmich(email: string, password: string): Promise<{
   user: ImmichUser;
 }> {
   const baseUrl = getImmichUrl();
-  const res = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Immich API] Connection to ${baseUrl} failed:`, msg);
+    throw new Error(
+      `Unable to reach Immich at ${baseUrl}. Ensure IMMICH_URL is accessible from the container: ${msg}`
+    );
+  }
 
   if (!res.ok) {
     const errorText = await res.text();
-    throw new Error(`Immich login failed (${res.status}): ${errorText}`);
+    let parsedMessage = errorText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      if (errorJson.message) {
+        parsedMessage = errorJson.message;
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(parsedMessage || `Immich login failed with status ${res.status}`);
   }
 
   const data = await res.json();

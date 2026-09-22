@@ -80,13 +80,29 @@ export async function resolveAuth(req: NextRequest): Promise<AuthContext | null>
     };
   }
 
-  // Mode 2: User Login Mode via Session Cookie
-  const cookie = req.cookies.get(SESSION_COOKIE_NAME);
-  if (!cookie?.value) {
+  // Mode 2: User Login Mode
+  // 1. Try Authorization header (Bearer <sessionId>)
+  const authHeader = req.headers.get("authorization");
+  let sessionId: string | null = null;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    sessionId = authHeader.substring(7).trim();
+  }
+
+  // 2. Try cookie
+  if (!sessionId) {
+    sessionId = req.cookies.get(SESSION_COOKIE_NAME)?.value ?? null;
+  }
+
+  // 3. Try query parameter (useful for <img> tags)
+  if (!sessionId) {
+    sessionId = req.nextUrl.searchParams.get("token") ?? null;
+  }
+
+  if (!sessionId) {
     return null;
   }
 
-  const session = getSession(cookie.value);
+  const session = getSession(sessionId);
   if (!session) {
     return null;
   }
@@ -99,24 +115,34 @@ export async function resolveAuth(req: NextRequest): Promise<AuthContext | null>
   };
 }
 
-export function attachSessionCookie(res: NextResponse, sessionId: string): void {
+export function attachSessionCookie(req: NextRequest, res: NextResponse, sessionId: string): void {
+  const isHttps =
+    req.headers.get("x-forwarded-proto") === "https" ||
+    req.nextUrl.protocol === "https:" ||
+    process.env.COOKIE_SECURE === "true";
+
   res.cookies.set({
     name: SESSION_COOKIE_NAME,
     value: sessionId,
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttps,
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
   });
 }
 
-export function clearSessionCookie(res: NextResponse): void {
+export function clearSessionCookie(req: NextRequest, res: NextResponse): void {
+  const isHttps =
+    req.headers.get("x-forwarded-proto") === "https" ||
+    req.nextUrl.protocol === "https:" ||
+    process.env.COOKIE_SECURE === "true";
+
   res.cookies.set({
     name: SESSION_COOKIE_NAME,
     value: "",
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttps,
     sameSite: "lax",
     path: "/",
     maxAge: 0,

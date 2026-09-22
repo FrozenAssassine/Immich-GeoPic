@@ -11,6 +11,7 @@ import { ImageOff } from "lucide-react";
 export default function Home() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [authMode, setAuthMode] = useState<"apikey" | "login">("login");
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [user, setUser] = useState<{
     id: string;
     name: string;
@@ -38,6 +39,28 @@ export default function Home() {
   const [startDate, setStartDate] = useState(defaultDates.startDate);
   const [endDate, setEndDate] = useState(defaultDates.endDate);
 
+  // Authenticated fetch helper that sends Bearer token & handles credentials
+  const authFetch = useCallback(
+    async (input: string, init?: RequestInit): Promise<Response> => {
+      const headers = new Headers(init?.headers);
+      const token =
+        sessionToken ||
+        (typeof window !== "undefined"
+          ? localStorage.getItem("geopic_session_token")
+          : null);
+
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+
+      return fetch(input, {
+        ...init,
+        headers,
+      });
+    },
+    [sessionToken]
+  );
+
   // Dynamic import for Leaflet map (client-only)
   const Map = useMemo(
     () =>
@@ -56,50 +79,70 @@ export default function Home() {
   // Check auth on load
   const checkAuth = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const savedToken =
+        typeof window !== "undefined"
+          ? localStorage.getItem("geopic_session_token")
+          : null;
+      if (savedToken) {
+        setSessionToken(savedToken);
+      }
+
+      const res = await authFetch("/api/auth/me");
       const data = await res.json();
       if (data.authenticated) {
         setIsAuthenticated(true);
         setAuthMode(data.mode);
         setUser(data.user);
       } else {
+        if (savedToken) {
+          localStorage.removeItem("geopic_session_token");
+          setSessionToken(null);
+        }
         setIsAuthenticated(false);
       }
     } catch (err) {
       console.error("Auth check failed:", err);
       setIsAuthenticated(false);
     }
-  }, []);
+  }, [authFetch]);
 
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
 
   // Fetch photos for the selected date range
-  const loadImages = useCallback(async (start?: string, end?: string) => {
-    setIsLoading(true);
-    try {
-      const query = new URLSearchParams();
-      if (start) query.set("startDate", start);
-      if (end) query.set("endDate", end);
+  const loadImages = useCallback(
+    async (start?: string, end?: string) => {
+      setIsLoading(true);
+      try {
+        const query = new URLSearchParams();
+        if (start) query.set("startDate", start);
+        if (end) query.set("endDate", end);
 
-      const res = await fetch(`/api/images?${query.toString()}`);
-      if (!res.ok) {
-        if (res.status === 401) {
-          setIsAuthenticated(false);
-          return;
+        const res = await authFetch(`/api/images?${query.toString()}`);
+        if (!res.ok) {
+          if (res.status === 401) {
+            console.warn("[GeoPic] 401 received while fetching images. Session may be expired.");
+            setIsAuthenticated(false);
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("geopic_session_token");
+            }
+            setSessionToken(null);
+            return;
+          }
+          throw new Error(`Failed to fetch images (${res.status})`);
         }
-        throw new Error(`Failed to fetch images (${res.status})`);
-      }
 
-      const data = await res.json();
-      setImages(data.images || []);
-    } catch (err) {
-      console.error("Failed to load images from Immich:", err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+        const data = await res.json();
+        setImages(data.images || []);
+      } catch (err) {
+        console.error("Failed to load images from Immich:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [authFetch]
+  );
 
   // When authenticated, trigger initial image load
   useEffect(() => {
@@ -163,17 +206,30 @@ export default function Home() {
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await authFetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
       console.error("Logout error:", err);
     } finally {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("geopic_session_token");
+      }
+      setSessionToken(null);
       setIsAuthenticated(false);
       setUser(null);
       setImages([]);
     }
   };
 
-  const handleLoginSuccess = (loggedInUser: { id: string; name: string; email: string }) => {
+  const handleLoginSuccess = (
+    loggedInUser: { id: string; name: string; email: string },
+    token?: string
+  ) => {
+    if (token) {
+      setSessionToken(token);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("geopic_session_token", token);
+      }
+    }
     setUser(loggedInUser);
     setIsAuthenticated(true);
     setAuthMode("login");
@@ -201,6 +257,7 @@ export default function Home() {
       <HeaderBar
         user={user}
         authMode={authMode}
+        sessionToken={sessionToken}
         onLogout={handleLogout}
         timespanPreset={timespanPreset}
         startDate={startDate}
@@ -222,7 +279,11 @@ export default function Home() {
           </div>
         )}
 
-        <Map images={images} onImagesUpdate={setImages} />
+        <Map
+          images={images}
+          onImagesUpdate={setImages}
+          sessionToken={sessionToken}
+        />
 
         {isLoading && (
           <div className={styles.loadingOverlay}>

@@ -3,7 +3,14 @@ import { logoutFromImmich } from "@/lib/immich";
 import { clearSessionCookie, deleteSession, SESSION_COOKIE_NAME } from "@/lib/session";
 
 export async function POST(req: NextRequest) {
-  const sessionId = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  let sessionId = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!sessionId) {
+    const authHeader = req.headers.get("authorization");
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      sessionId = authHeader.substring(7).trim();
+    }
+  }
+
   if (sessionId) {
     const immichToken = deleteSession(sessionId);
     if (immichToken) {
@@ -12,6 +19,6 @@ export async function POST(req: NextRequest) {
   }
 
   const res = NextResponse.json({ success: true });
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   return res;
 }

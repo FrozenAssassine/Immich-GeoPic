@@ -6,7 +6,10 @@ import { MapPin, Mail, Lock, AlertCircle, Loader2 } from "lucide-react";
 
 export type LoginModalProps = {
   isOpen: boolean;
-  onLoginSuccess: (user: { id: string; name: string; email: string }) => void;
+  onLoginSuccess: (
+    user: { id: string; name: string; email: string },
+    token?: string
+  ) => void;
 };
 
 export default function LoginModal({ isOpen, onLoginSuccess }: LoginModalProps) {
@@ -34,9 +37,10 @@ export default function LoginModal({ isOpen, onLoginSuccess }: LoginModalProps) 
         throw new Error(data.error || "Login failed. Check your credentials.");
       }
 
-      onLoginSuccess(data.user);
+      onLoginSuccess(data.user, data.token);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Authentication failed";
+      console.error("[LoginModal] Login error:", message);
       setError(message);
     } finally {
       setLoading(false);
