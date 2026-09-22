@@ -72,17 +72,40 @@ function interpolateCoords(
   };
 }
 
-function randomOffset(scale = 0.001) {
-  return (Math.random() - 0.5) * scale;
+function hasValidCoords(img: ImageItem): boolean {
+  return (
+    !!img.coords &&
+    typeof img.coords.lat === "number" &&
+    typeof img.coords.lng === "number" &&
+    !Number.isNaN(img.coords.lat) &&
+    !Number.isNaN(img.coords.lng)
+  );
+}
+
+function deterministicOffset(id: string, salt: number, scale = 0.001): number {
+  let hash = salt;
+  for (let i = 0; i < id.length; i++) {
+    hash = (Math.imul(31, hash) + id.charCodeAt(i)) | 0;
+  }
+  const normalized = ((Math.abs(hash) % 10000) / 10000) - 0.5;
+  return normalized * scale;
 }
 
 function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
   if (!Array.isArray(items) || items.length === 0) return [];
 
   const n = items.length;
-  // Sort items chronologically
+  // Create clean shallow clones stripped of stale estimation properties
+  // so we never mutate the original objects in React state.
   const out: EstimatedImageItem[] = items
-    .slice()
+    .map((item) => {
+      const { estimated, estCoords, ...cleanItem } = item as EstimatedImageItem;
+      return {
+        ...cleanItem,
+        estimated: false,
+        estCoords: undefined,
+      };
+    })
     .sort((a, b) => parseTimeMs(a.timestamp) - parseTimeMs(b.timestamp));
 
   // Pass 1: Forward scan - find previous geotagged photo index for each photo
@@ -90,7 +113,7 @@ function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
   let lastGeo = -1;
   for (let i = 0; i < n; i++) {
     prevGeoIndex[i] = lastGeo;
-    if (out[i].coords) {
+    if (hasValidCoords(out[i])) {
       lastGeo = i;
     }
   }
@@ -100,14 +123,18 @@ function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
   lastGeo = -1;
   for (let i = n - 1; i >= 0; i--) {
     nextGeoIndex[i] = lastGeo;
-    if (out[i].coords) {
+    if (hasValidCoords(out[i])) {
       lastGeo = i;
     }
   }
 
   // Pass 3: Estimate unlocated photo coordinates in O(1) per photo
   for (let i = 0; i < n; i++) {
-    if (out[i].coords) continue;
+    if (hasValidCoords(out[i])) {
+      out[i].estimated = false;
+      out[i].estCoords = undefined;
+      continue;
+    }
 
     const prevIndex = prevGeoIndex[i];
     const nextIndex = nextGeoIndex[i];
@@ -129,21 +156,21 @@ function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
       out[i].estimated = true;
       const base = out[prevIndex].coords!;
       out[i].estCoords = {
-        lat: base.lat + randomOffset(),
-        lng: base.lng + randomOffset(),
+        lat: base.lat + deterministicOffset(out[i].id, 1),
+        lng: base.lng + deterministicOffset(out[i].id, 2),
       };
     } else if (nextIndex !== -1) {
       out[i].estimated = true;
       const base = out[nextIndex].coords!;
       out[i].estCoords = {
-        lat: base.lat + randomOffset(),
-        lng: base.lng + randomOffset(),
+        lat: base.lat + deterministicOffset(out[i].id, 3),
+        lng: base.lng + deterministicOffset(out[i].id, 4),
       };
     } else {
       out[i].estimated = true;
       out[i].estCoords = {
-        lat: 51.5074 + randomOffset(0.05),
-        lng: -0.1278 + randomOffset(0.05),
+        lat: 51.5074 + deterministicOffset(out[i].id, 5, 0.05),
+        lng: -0.1278 + deterministicOffset(out[i].id, 6, 0.05),
       };
     }
   }
@@ -482,7 +509,9 @@ export default function LeafletGeorefMap(props: Props) {
   }, [bounds, computed]);
 
   const estimatedInBounds = useMemo(() => {
-    return selectedItemsInBounds.filter((i) => i.estimated && i.estCoords);
+    return selectedItemsInBounds.filter(
+      (i) => !hasValidCoords(i) && i.estimated && i.estCoords
+    );
   }, [selectedItemsInBounds]);
 
   const getAuthHeaders = () => {
@@ -614,15 +643,22 @@ export default function LeafletGeorefMap(props: Props) {
     setIsUpdating(true);
 
     try {
-      await fetch(`/api/images/${selectedImage.id}/location`, {
+      const res = await fetch(`/api/images/${selectedImage.id}/location`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({ coords: { lat, lng } }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to relocate marker: ${res.status}`);
+      }
 
-      const updated = images.map((img) =>
-        img.id === selectedImage.id ? { ...img, coords: { lat, lng } } : img
-      );
+      const updated = images.map((img) => {
+        if (img.id === selectedImage.id) {
+          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          return { ...clean, coords: { lat, lng } };
+        }
+        return img;
+      });
       updateImages(updated);
     } catch (err) {
       console.error("Failed to relocate marker:", err);
@@ -638,15 +674,22 @@ export default function LeafletGeorefMap(props: Props) {
     setIsUpdating(true);
     try {
       const coords = selectedImage.estCoords;
-      await fetch(`/api/images/${selectedImage.id}/location`, {
+      const res = await fetch(`/api/images/${selectedImage.id}/location`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({ coords }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to fix marker: ${res.status}`);
+      }
 
-      const updated = images.map((img) =>
-        img.id === selectedImage.id ? { ...img, coords } : img
-      );
+      const updated = images.map((img) => {
+        if (img.id === selectedImage.id) {
+          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          return { ...clean, coords };
+        }
+        return img;
+      });
       updateImages(updated);
     } catch (err) {
       console.error("Failed to fix marker:", err);
@@ -661,15 +704,22 @@ export default function LeafletGeorefMap(props: Props) {
 
     setIsUpdating(true);
     try {
-      await fetch(`/api/images/${selectedImage.id}/location`, {
+      const res = await fetch(`/api/images/${selectedImage.id}/location`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({ coords: null }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to remove coordinates: ${res.status}`);
+      }
 
-      const updated = images.map((img) =>
-        img.id === selectedImage.id ? { ...img, coords: undefined } : img
-      );
+      const updated = images.map((img) => {
+        if (img.id === selectedImage.id) {
+          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          return { ...clean, coords: undefined };
+        }
+        return img;
+      });
       updateImages(updated);
     } catch (err) {
       console.error("Failed to remove coordinates:", err);
@@ -689,16 +739,23 @@ export default function LeafletGeorefMap(props: Props) {
         coords: img.estCoords!,
       }));
 
-      await fetch("/api/images/bulk-location", {
+      const res = await fetch("/api/images/bulk-location", {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({ updates }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to bulk fix markers: ${res.status}`);
+      }
 
       const updatedMap = new Map(updates.map((u) => [u.id, u.coords]));
       const updated = images.map((img) => {
         const newCoords = updatedMap.get(img.id);
-        return newCoords ? { ...img, coords: newCoords } : img;
+        if (newCoords) {
+          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          return { ...clean, coords: newCoords };
+        }
+        return img;
       });
 
       updateImages(updated);
@@ -1020,7 +1077,7 @@ export default function LeafletGeorefMap(props: Props) {
               <span>Relocate Marker</span>
             </button>
 
-            {selectedImage.estimated && selectedImage.estCoords && (
+            {!selectedImage.coords && selectedImage.estimated && selectedImage.estCoords && (
               <button
                 className={`${styles.actionBtn} ${styles.success}`}
                 onClick={handleFixSingleMarker}
