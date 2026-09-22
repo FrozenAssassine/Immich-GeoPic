@@ -1,0 +1,70 @@
+import { NextRequest, NextResponse } from "next/server";
+import { searchAssets } from "@/lib/immich";
+import { resolveAuth } from "@/lib/session";
+import { ImageItem } from "@/types/ImageItem";
+
+export async function GET(req: NextRequest) {
+  try {
+    const ctx = await resolveAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(req.url);
+    const startDateParam = searchParams.get("startDate");
+    const endDateParam = searchParams.get("endDate");
+
+    // Default to past 6 months if unspecified
+    let startDate = startDateParam;
+    let endDate = endDateParam;
+
+    if (!startDate && !endDate) {
+      const now = new Date();
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(now.getMonth() - 6);
+      startDate = sixMonthsAgo.toISOString();
+      endDate = now.toISOString();
+    }
+
+    const { items, total } = await searchAssets(ctx.auth, {
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      size: 1000,
+    });
+
+    const images: ImageItem[] = items.map((asset) => {
+      const timestamp =
+        asset.exifInfo?.dateTimeOriginal ||
+        asset.dateTimeOriginal ||
+        asset.fileCreatedAt ||
+        new Date().toISOString();
+
+      let coords: { lat: number; lng: number } | undefined;
+      const lat = asset.exifInfo?.latitude;
+      const lng = asset.exifInfo?.longitude;
+      if (lat != null && lng != null && !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lng))) {
+        coords = { lat: Number(lat), lng: Number(lng) };
+      }
+
+      return {
+        id: asset.id,
+        name: asset.originalFileName || "Untitled",
+        timestamp,
+        coords,
+        city: asset.exifInfo?.city || undefined,
+        country: asset.exifInfo?.country || undefined,
+        thumbUrl: `/api/images/${asset.id}/thumbnail`,
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      images,
+      total,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to load images";
+    console.error("Images API error:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

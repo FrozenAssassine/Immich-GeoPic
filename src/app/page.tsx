@@ -1,31 +1,242 @@
 'use client';
-import LeafletGeorefMap from "@/components/LeafletGeorefMap";
-import styles from "./page.module.scss";
-import { useEffect, useMemo, useState } from "react";
+
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
+import styles from "./page.module.scss";
+import HeaderBar, { TimespanPreset } from "@/components/HeaderBar";
+import LoginModal from "@/components/LoginModal";
 import { ImageItem } from "@/types/ImageItem";
+import { ImageOff } from "lucide-react";
 
 export default function Home() {
-    const [imgs,setImgs] = useState<ImageItem[]>([]);
-    useEffect(()=>{
-        fetch('/api').then(res => res.json()).then(data=>setImgs(data.images));
-    },[]);
-    const Map = useMemo(()=>dynamic(
-        ()  => import("@/components/LeafletGeorefMap"),
-        {
-            ssr: false,
-            loading: () => <div className={styles.loadingbox}><p className={styles.loadinginfo}>Map is loading...</p></div>
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [authMode, setAuthMode] = useState<"apikey" | "login">("login");
+  const [user, setUser] = useState<{
+    id: string;
+    name: string;
+    email: string;
+    profileImagePath?: string | null;
+  } | null>(null);
+
+  const [images, setImages] = useState<ImageItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [timespanPreset, setTimespanPreset] = useState<TimespanPreset>("6m");
+
+  // Format dates as YYYY-MM-DD
+  const formatDateInput = (date: Date) => date.toISOString().split("T")[0];
+
+  const defaultDates = useMemo(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setMonth(start.getMonth() - 6);
+    return {
+      startDate: formatDateInput(start),
+      endDate: formatDateInput(end),
+    };
+  }, []);
+
+  const [startDate, setStartDate] = useState(defaultDates.startDate);
+  const [endDate, setEndDate] = useState(defaultDates.endDate);
+
+  // Dynamic import for Leaflet map (client-only)
+  const Map = useMemo(
+    () =>
+      dynamic(() => import("@/components/LeafletGeorefMap"), {
+        ssr: false,
+        loading: () => (
+          <div className={styles.loadingBox}>
+            <div className={styles.spinner} />
+            <p className={styles.loadingText}>Initializing Leaflet map...</p>
+          </div>
+        ),
+      }),
+    []
+  );
+
+  // Check auth on load
+  const checkAuth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me");
+      const data = await res.json();
+      if (data.authenticated) {
+        setIsAuthenticated(true);
+        setAuthMode(data.mode);
+        setUser(data.user);
+      } else {
+        setIsAuthenticated(false);
+      }
+    } catch (err) {
+      console.error("Auth check failed:", err);
+      setIsAuthenticated(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  // Fetch photos for the selected date range
+  const loadImages = useCallback(async (start?: string, end?: string) => {
+    setIsLoading(true);
+    try {
+      const query = new URLSearchParams();
+      if (start) query.set("startDate", start);
+      if (end) query.set("endDate", end);
+
+      const res = await fetch(`/api/images?${query.toString()}`);
+      if (!res.ok) {
+        if (res.status === 401) {
+          setIsAuthenticated(false);
+          return;
         }
-    ),[]);
+        throw new Error(`Failed to fetch images (${res.status})`);
+      }
+
+      const data = await res.json();
+      setImages(data.images || []);
+    } catch (err) {
+      console.error("Failed to load images from Immich:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // When authenticated, trigger initial image load
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadImages(startDate, endDate);
+    }
+  }, [isAuthenticated, loadImages, startDate, endDate]);
+
+  const handleTimespanChange = (
+    preset: TimespanPreset,
+    customStart?: string,
+    customEnd?: string
+  ) => {
+    setTimespanPreset(preset);
+    const now = new Date();
+
+    if (preset === "1m") {
+      const s = new Date();
+      s.setMonth(now.getMonth() - 1);
+      const startStr = formatDateInput(s);
+      const endStr = formatDateInput(now);
+      setStartDate(startStr);
+      setEndDate(endStr);
+      loadImages(startStr, endStr);
+    } else if (preset === "3m") {
+      const s = new Date();
+      s.setMonth(now.getMonth() - 3);
+      const startStr = formatDateInput(s);
+      const endStr = formatDateInput(now);
+      setStartDate(startStr);
+      setEndDate(endStr);
+      loadImages(startStr, endStr);
+    } else if (preset === "6m") {
+      const s = new Date();
+      s.setMonth(now.getMonth() - 6);
+      const startStr = formatDateInput(s);
+      const endStr = formatDateInput(now);
+      setStartDate(startStr);
+      setEndDate(endStr);
+      loadImages(startStr, endStr);
+    } else if (preset === "1y") {
+      const s = new Date();
+      s.setFullYear(now.getFullYear() - 1);
+      const startStr = formatDateInput(s);
+      const endStr = formatDateInput(now);
+      setStartDate(startStr);
+      setEndDate(endStr);
+      loadImages(startStr, endStr);
+    } else if (preset === "all") {
+      setStartDate("");
+      setEndDate("");
+      loadImages("", "");
+    } else if (preset === "custom") {
+      const startStr = customStart ?? startDate;
+      const endStr = customEnd ?? endDate;
+      setStartDate(startStr);
+      setEndDate(endStr);
+      loadImages(startStr, endStr);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Logout error:", err);
+    } finally {
+      setIsAuthenticated(false);
+      setUser(null);
+      setImages([]);
+    }
+  };
+
+  const handleLoginSuccess = (loggedInUser: { id: string; name: string; email: string }) => {
+    setUser(loggedInUser);
+    setIsAuthenticated(true);
+    setAuthMode("login");
+  };
+
+  const geotaggedCount = useMemo(
+    () => images.filter((img) => !!img.coords).length,
+    [images]
+  );
+  const estimatedCount = images.length - geotaggedCount;
+
+  // Show loading during initial auth check
+  if (isAuthenticated === null) {
     return (
-        <div>
-            {imgs.length === 0 ? (
-                <div className={styles.loadingbox}>
-                    <p className={styles.loadinginfo}>Loading images...</p>
-                </div>
-            ) : (
-                <Map images={imgs} />
-            )}
-        </div>
+      <div className={styles.loadingBox}>
+        <div className={styles.spinner} />
+        <p className={styles.loadingText}>Connecting to Immich GeoPic...</p>
+      </div>
     );
+  }
+
+  return (
+    <div className={styles.container}>
+      {/* Header Bar */}
+      <HeaderBar
+        user={user}
+        authMode={authMode}
+        onLogout={handleLogout}
+        timespanPreset={timespanPreset}
+        startDate={startDate}
+        endDate={endDate}
+        onTimespanChange={handleTimespanChange}
+        totalCount={images.length}
+        geotaggedCount={geotaggedCount}
+        estimatedCount={estimatedCount}
+        isLoading={isLoading}
+        onRefresh={() => loadImages(startDate, endDate)}
+      />
+
+      {/* Main Map Content */}
+      <main className={styles.main}>
+        {images.length === 0 && !isLoading && (
+          <div className={styles.emptyOverlay}>
+            <ImageOff size={16} />
+            <span>No images found for the selected timespan. Try expanding the date range.</span>
+          </div>
+        )}
+
+        <Map images={images} onImagesUpdate={setImages} />
+
+        {isLoading && (
+          <div className={styles.loadingOverlay}>
+            <div className={styles.spinner} />
+            <p className={styles.loadingText}>Fetching photos from Immich...</p>
+          </div>
+        )}
+      </main>
+
+      {/* Login Modal */}
+      <LoginModal
+        isOpen={isAuthenticated === false}
+        onLoginSuccess={handleLoginSuccess}
+      />
+    </div>
+  );
 }

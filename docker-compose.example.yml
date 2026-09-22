@@ -1,0 +1,18 @@
+# Immich GeoPic - Docker Compose Example Snippet
+# Add this service to your existing Immich docker-compose.yml or run alongside Immich.
+
+services:
+  immich-geopic:
+    container_name: immich_geopic
+    image: ghcr.io/finn-freitag/immich-geopic:latest # or build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # URL to your Immich server (e.g. http://immich-server:2283 or public URL)
+      - IMMICH_URL=http://immich-server:2283
+
+      # (Optional) Immich API Key.
+      # If provided, no user login is required (ideal for private network setups).
+      # If omitted, users authenticate on the web UI using their Immich email & password.
+      - IMMICH_API_KEY=

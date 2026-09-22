@@ -1,0 +1,281 @@
+export type ImmichAuth = {
+  token?: string;
+  apiKey?: string;
+};
+
+export type ImmichUser = {
+  id: string;
+  email: string;
+  name: string;
+  profileImagePath?: string | null;
+  isAdmin?: boolean;
+};
+
+export type ImmichAsset = {
+  id: string;
+  originalFileName: string;
+  fileCreatedAt: string;
+  dateTimeOriginal?: string | null;
+  exifInfo?: {
+    dateTimeOriginal?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    city?: string | null;
+    country?: string | null;
+  } | null;
+};
+
+export function getImmichUrl(): string {
+  let url = process.env.IMMICH_URL || "http://localhost:2283";
+  url = url.trim().replace(/\/+$/, "");
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = `http://${url}`;
+  }
+  return url;
+}
+
+export function getAuthHeaders(auth: ImmichAuth): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (auth.apiKey) {
+    headers["x-api-key"] = auth.apiKey;
+  } else if (auth.token) {
+    headers["Authorization"] = `Bearer ${auth.token}`;
+  }
+  return headers;
+}
+
+export async function loginToImmich(email: string, password: string): Promise<{
+  accessToken: string;
+  user: ImmichUser;
+}> {
+  const baseUrl = getImmichUrl();
+  const res = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Immich login failed (${res.status}): ${errorText}`);
+  }
+
+  const data = await res.json();
+  return {
+    accessToken: data.accessToken,
+    user: {
+      id: data.userId || data.id,
+      email: data.userEmail || email,
+      name: data.name || email.split("@")[0],
+      profileImagePath: data.profileImagePath,
+      isAdmin: !!data.isAdmin,
+    },
+  };
+}
+
+export async function logoutFromImmich(token: string): Promise<void> {
+  try {
+    const baseUrl = getImmichUrl();
+    await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    console.error("Immich logout error:", err);
+  }
+}
+
+export async function getCurrentUser(auth: ImmichAuth): Promise<ImmichUser> {
+  const baseUrl = getImmichUrl();
+  const res = await fetch(`${baseUrl}/api/users/me`, {
+    headers: getAuthHeaders(auth),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch current user (${res.status})`);
+  }
+
+  const data = await res.json();
+  return {
+    id: data.id,
+    email: data.email,
+    name: data.name || data.email,
+    profileImagePath: data.profileImagePath,
+    isAdmin: !!data.isAdmin,
+  };
+}
+
+export async function getProfileImageStream(auth: ImmichAuth): Promise<{
+  body: ReadableStream<Uint8Array> | null;
+  contentType: string;
+} | null> {
+  const baseUrl = getImmichUrl();
+  const res = await fetch(`${baseUrl}/api/users/me/profile-image`, {
+    headers: getAuthHeaders(auth),
+  });
+
+  if (!res.ok || !res.body) {
+    return null;
+  }
+
+  return {
+    body: res.body,
+    contentType: res.headers.get("content-type") || "image/jpeg",
+  };
+}
+
+export async function searchAssets(
+  auth: ImmichAuth,
+  params: {
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    size?: number;
+  }
+): Promise<{ items: ImmichAsset[]; total: number }> {
+  const baseUrl = getImmichUrl();
+  const bodyPayload: Record<string, unknown> = {
+    type: "IMAGE",
+    withExif: true,
+    size: params.size || 500,
+    page: params.page || 1,
+  };
+
+  if (params.startDate) {
+    bodyPayload.createdAfter = new Date(params.startDate).toISOString();
+  }
+  if (params.endDate) {
+    bodyPayload.createdBefore = new Date(params.endDate).toISOString();
+  }
+
+  const res = await fetch(`${baseUrl}/api/search/metadata`, {
+    method: "POST",
+    headers: {
+      ...getAuthHeaders(auth),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(bodyPayload),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to search Immich assets (${res.status}): ${errorText}`);
+  }
+
+  const data = await res.json();
+
+  // Immich can return { assets: { items: [...], total: N } } or { items: [...], total: N } or array directly
+  let items: ImmichAsset[] = [];
+  let total = 0;
+
+  if (data?.assets?.items && Array.isArray(data.assets.items)) {
+    items = data.assets.items;
+    total = data.assets.total ?? items.length;
+  } else if (data?.items && Array.isArray(data.items)) {
+    items = data.items;
+    total = data.total ?? items.length;
+  } else if (Array.isArray(data)) {
+    items = data;
+    total = data.length;
+  }
+
+  return { items, total };
+}
+
+export async function getAssetThumbnailStream(
+  auth: ImmichAuth,
+  assetId: string,
+  size: "thumbnail" | "preview" = "thumbnail"
+): Promise<{
+  body: ReadableStream<Uint8Array> | null;
+  contentType: string;
+} | null> {
+  const baseUrl = getImmichUrl();
+  const res = await fetch(`${baseUrl}/api/assets/${assetId}/thumbnail?size=${size}`, {
+    headers: getAuthHeaders(auth),
+  });
+
+  if (!res.ok || !res.body) {
+    return null;
+  }
+
+  return {
+    body: res.body,
+    contentType: res.headers.get("content-type") || "image/webp",
+  };
+}
+
+export async function updateAssetLocation(
+  auth: ImmichAuth,
+  assetId: string,
+  coords: { lat: number; lng: number } | null
+): Promise<void> {
+  const baseUrl = getImmichUrl();
+  const latitude = coords ? coords.lat : null;
+  const longitude = coords ? coords.lng : null;
+
+  // Try bulk update endpoint PUT /api/assets first
+  const bulkRes = await fetch(`${baseUrl}/api/assets`, {
+    method: "PUT",
+    headers: {
+      ...getAuthHeaders(auth),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ids: [assetId],
+      latitude,
+      longitude,
+    }),
+  });
+
+  if (bulkRes.ok) return;
+
+  // Fallback to single asset endpoint PUT /api/assets/:id
+  const singleRes = await fetch(`${baseUrl}/api/assets/${assetId}`, {
+    method: "PUT",
+    headers: {
+      ...getAuthHeaders(auth),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      latitude,
+      longitude,
+    }),
+  });
+
+  if (!singleRes.ok) {
+    const errorText = await singleRes.text();
+    throw new Error(`Failed to update asset location (${singleRes.status}): ${errorText}`);
+  }
+}
+
+export async function bulkUpdateLocations(
+  auth: ImmichAuth,
+  updates: Array<{ id: string; coords: { lat: number; lng: number } }>
+): Promise<{ success: number; failed: number }> {
+  let success = 0;
+  let failed = 0;
+
+  // Concurrently update with small batches
+  const batchSize = 5;
+  for (let i = 0; i < updates.length; i += batchSize) {
+    const batch = updates.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (u) => {
+        try {
+          await updateAssetLocation(auth, u.id, u.coords);
+          success++;
+        } catch (err) {
+          console.error(`Failed to update asset ${u.id}:`, err);
+          failed++;
+        }
+      })
+    );
+  }
+
+  return { success, failed };
+}
