@@ -208,58 +208,66 @@ export async function searchAssets(
     total = data.length;
   }
 
-  // If no explicit page was requested and more items exist, fetch all remaining pages in parallel batches
+  // If no explicit page was requested and page 1 was full (or nextPage is indicated),
+  // paginate to fetch all remaining pages until all assets are retrieved (up to 50,000)
   const maxAssets = 50000;
-  const totalPages = Math.min(
-    Math.ceil(total / pageSize),
-    Math.ceil(maxAssets / pageSize)
-  );
+  if (!params.page) {
+    let currentPage = 1;
+    const nextPageIndicator = data?.assets?.nextPage ?? data?.nextPage ?? null;
+    let hasMore = nextPageIndicator != null || items.length === pageSize;
 
-  if (!params.page && totalPages > 1) {
-    const remainingPages: number[] = [];
-    for (let p = 2; p <= totalPages; p++) {
-      remainingPages.push(p);
-    }
+    while (hasMore && items.length < maxAssets) {
+      currentPage++;
+      try {
+        const nextRes = await fetch(`${baseUrl}/api/search/metadata`, {
+          method: "POST",
+          headers: {
+            ...getAuthHeaders(auth),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ...bodyPayload, page: currentPage }),
+        });
 
-    // Fetch remaining pages in concurrent batches (5 parallel requests at a time)
-    const concurrency = 5;
-    for (let i = 0; i < remainingPages.length; i += concurrency) {
-      const pageBatch = remainingPages.slice(i, i + concurrency);
-      const batchResults = await Promise.all(
-        pageBatch.map(async (p) => {
-          try {
-            const pageRes = await fetch(`${baseUrl}/api/search/metadata`, {
-              method: "POST",
-              headers: {
-                ...getAuthHeaders(auth),
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ ...bodyPayload, page: p }),
-            });
-            if (!pageRes.ok) return [];
-            const pageData = await pageRes.json();
-            if (pageData?.assets?.items && Array.isArray(pageData.assets.items)) {
-              return pageData.assets.items as ImmichAsset[];
-            } else if (pageData?.items && Array.isArray(pageData.items)) {
-              return pageData.items as ImmichAsset[];
-            } else if (Array.isArray(pageData)) {
-              return pageData as ImmichAsset[];
-            }
-            return [];
-          } catch (err) {
-            console.warn(`[searchAssets] Failed to fetch page ${p}:`, err);
-            return [];
-          }
-        })
-      );
+        if (!nextRes.ok) {
+          console.warn(`[searchAssets] Page ${currentPage} returned status ${nextRes.status}`);
+          break;
+        }
 
-      for (const batchItems of batchResults) {
-        items.push(...batchItems);
+        const nextData = await nextRes.json();
+        let nextItems: ImmichAsset[] = [];
+        if (nextData?.assets?.items && Array.isArray(nextData.assets.items)) {
+          nextItems = nextData.assets.items;
+        } else if (nextData?.items && Array.isArray(nextData.items)) {
+          nextItems = nextData.items;
+        } else if (Array.isArray(nextData)) {
+          nextItems = nextData;
+        }
+
+        if (nextItems.length === 0) {
+          break;
+        }
+
+        items.push(...nextItems);
+
+        // Determine if another page exists:
+        // 1. Explicit nextPage property returned by Immich
+        // 2. Or exactly a full page (1,000 items) returned, indicating more may follow
+        const next = nextData?.assets?.nextPage ?? nextData?.nextPage ?? null;
+        if (next != null) {
+          hasMore = true;
+        } else if (nextItems.length === pageSize) {
+          hasMore = true;
+        } else {
+          hasMore = false;
+        }
+      } catch (err) {
+        console.warn(`[searchAssets] Failed to fetch page ${currentPage}:`, err);
+        break;
       }
     }
   }
 
-  return { items, total };
+  return { items, total: items.length };
 }
 
 export async function getAssetThumbnailStream(
