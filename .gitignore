@@ -44,3 +44,5 @@ next-env.d.ts
 
 public
 publicx
+
+package-lock.json
