@@ -28,6 +28,9 @@ export type ImmichAsset = {
 export function getImmichUrl(): string {
   let url = process.env.IMMICH_URL || "http://localhost:2283";
   url = url.trim().replace(/\/+$/, "");
+  if (url.endsWith("/api")) {
+    url = url.slice(0, -4).replace(/\/+$/, "");
+  }
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     url = `http://${url}`;
   }
@@ -52,15 +55,17 @@ export async function loginToImmich(email: string, password: string): Promise<{
 }> {
   const baseUrl = getImmichUrl();
   let res: Response;
+  const targetUrl = `${baseUrl}/api/auth/login`;
+
   try {
-    res = await fetch(`${baseUrl}/api/auth/login`, {
+    res = await fetch(targetUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[Immich API] Connection to ${baseUrl} failed:`, msg);
+    console.error(`[Immich API] Connection to ${targetUrl} failed:`, msg);
     throw new Error(
       `Unable to reach Immich at ${baseUrl}. Ensure IMMICH_URL is accessible from the container: ${msg}`
     );
@@ -68,14 +73,26 @@ export async function loginToImmich(email: string, password: string): Promise<{
 
   if (!res.ok) {
     const errorText = await res.text();
-    let parsedMessage = errorText;
+    let parsedMessage = "";
     try {
       const errorJson = JSON.parse(errorText);
       if (errorJson.message) {
-        parsedMessage = errorJson.message;
+        parsedMessage = Array.isArray(errorJson.message)
+          ? errorJson.message.join(", ")
+          : String(errorJson.message);
       }
     } catch {
-      // ignore
+      if (
+        errorText.includes("<html") ||
+        errorText.includes("<!DOCTYPE") ||
+        errorText.includes("<body")
+      ) {
+        const titleMatch = errorText.match(/<title>(.*?)<\/title>/i);
+        const title = titleMatch ? titleMatch[1].trim() : `${res.status} Not Found`;
+        parsedMessage = `Immich endpoint (${targetUrl}) returned an HTML error page ("${title}"). Please check that IMMICH_URL points directly to your Immich server instance (e.g. http://immich-server:2283 or your Immich subdomain).`;
+      } else {
+        parsedMessage = errorText.slice(0, 250);
+      }
     }
     throw new Error(parsedMessage || `Immich login failed with status ${res.status}`);
   }

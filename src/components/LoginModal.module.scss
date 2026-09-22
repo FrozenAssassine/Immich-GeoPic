@@ -114,6 +114,9 @@
   align-items: center;
   gap: 8px;
   width: 100%;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 .submitBtn {
