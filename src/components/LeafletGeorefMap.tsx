@@ -318,20 +318,32 @@ export default function LeafletGeorefMap(props: Props) {
     }
   };
 
+  const prevCountRef = useRef(0);
+  useEffect(() => {
+    if (images.length > 0 && prevCountRef.current === 0) {
+      setFitTrigger((prev) => prev + 1);
+    }
+    prevCountRef.current = images.length;
+  }, [images]);
+
   // Fit Bounds component
   function FitBoundsHelper({ trigger }: { trigger: number }) {
     const map = useMap();
     useEffect(() => {
       if (trigger === 0) return;
-      const allCoords: [number, number][] = computed
-        .map((i) => i.coords || i.estCoords)
-        .filter((c): c is { lat: number; lng: number } => !!c && !Number.isNaN(c.lat))
-        .map((c) => [c.lat, c.lng]);
+      const timer = setTimeout(() => {
+        map.invalidateSize();
+        const allCoords: [number, number][] = computed
+          .map((i) => i.coords || i.estCoords)
+          .filter((c): c is { lat: number; lng: number } => !!c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng))
+          .map((c) => [c.lat, c.lng]);
 
-      if (allCoords.length > 0) {
-        const b = L.latLngBounds(allCoords);
-        map.fitBounds(b, { padding: [50, 50], maxZoom: 16 });
-      }
+        if (allCoords.length > 0) {
+          const b = L.latLngBounds(allCoords);
+          map.fitBounds(b, { padding: [60, 60], maxZoom: 16 });
+        }
+      }, 150);
+      return () => clearTimeout(timer);
     }, [trigger, map]);
     return null;
   }
@@ -341,58 +353,133 @@ export default function LeafletGeorefMap(props: Props) {
   // Rectangle Selection Drawer
   function RectangleDrawer() {
     const map = useMap();
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [startLatLng, setStartLatLng] = useState<LatLng | null>(null);
+    const isDrawingRef = useRef(false);
+    const startLatLngRef = useRef<LatLng | null>(null);
+    const drawBoundsRef = useRef<LatLngBounds | null>(null);
+    const [drawBounds, setDrawBounds] = useState<LatLngBounds | null>(null);
     const shiftPressed = useRef(false);
 
-    useMapEvents({
-      keydown(e) {
-        if (e.originalEvent.key === "Shift") shiftPressed.current = true;
-        if (e.originalEvent.key === "Escape") {
+    // Disable map panning when boxSelectMode is active
+    useEffect(() => {
+      if (boxSelectMode) {
+        map.dragging.disable();
+      } else if (!shiftPressed.current && !isDrawingRef.current) {
+        map.dragging.enable();
+      }
+    }, [boxSelectMode, map]);
+
+    useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Shift") {
+          shiftPressed.current = true;
+          map.dragging.disable();
+        }
+        if (e.key === "Escape") {
           setIsRelocating(false);
           setBounds(null);
+          setDrawBounds(null);
+          drawBoundsRef.current = null;
+          isDrawingRef.current = false;
+          startLatLngRef.current = null;
+          if (!boxSelectMode) {
+            map.dragging.enable();
+          }
         }
-      },
-      keyup(e) {
-        if (e.originalEvent.key === "Shift") shiftPressed.current = false;
-      },
+      };
+
+      const handleKeyUp = (e: KeyboardEvent) => {
+        if (e.key === "Shift") {
+          shiftPressed.current = false;
+          if (!boxSelectMode && !isDrawingRef.current) {
+            map.dragging.enable();
+          }
+        }
+      };
+
+      const handleGlobalMouseUp = () => {
+        if (isDrawingRef.current) {
+          if (drawBoundsRef.current) {
+            setBounds(drawBoundsRef.current);
+          }
+          isDrawingRef.current = false;
+          startLatLngRef.current = null;
+          drawBoundsRef.current = null;
+          setDrawBounds(null);
+          if (!boxSelectMode && !shiftPressed.current) {
+            map.dragging.enable();
+          }
+        }
+      };
+
+      window.addEventListener("keydown", handleKeyDown);
+      window.addEventListener("keyup", handleKeyUp);
+      window.addEventListener("mouseup", handleGlobalMouseUp);
+
+      return () => {
+        window.removeEventListener("keydown", handleKeyDown);
+        window.removeEventListener("keyup", handleKeyUp);
+        window.removeEventListener("mouseup", handleGlobalMouseUp);
+      };
+    }, [map, boxSelectMode]);
+
+    useMapEvents({
       mousedown(e) {
         if (isRelocating) return;
         if (shiftPressed.current || boxSelectMode) {
-          setIsDrawing(true);
-          setStartLatLng(e.latlng);
-          setBounds(null);
+          isDrawingRef.current = true;
+          startLatLngRef.current = e.latlng;
+          drawBoundsRef.current = null;
           map.dragging.disable();
+          setBounds(null);
+          setDrawBounds(null);
         }
       },
       mousemove(e) {
-        if (isDrawing && startLatLng) {
-          const newBounds = L.latLngBounds(startLatLng, e.latlng);
-          setBounds(newBounds);
+        if (isDrawingRef.current && startLatLngRef.current) {
+          const currentBounds = L.latLngBounds(startLatLngRef.current, e.latlng);
+          drawBoundsRef.current = currentBounds;
+          setDrawBounds(currentBounds);
         }
       },
       mouseup(e) {
-        if (isDrawing && startLatLng) {
-          const finalBounds = L.latLngBounds(startLatLng, e.latlng);
-          setBounds(finalBounds);
+        if (isDrawingRef.current && startLatLngRef.current) {
+          const startPt = map.latLngToContainerPoint(startLatLngRef.current);
+          const endPt = map.latLngToContainerPoint(e.latlng);
+          const dist = startPt.distanceTo(endPt);
+
+          // Only create selection if user dragged at least 15 pixels
+          if (dist >= 15) {
+            const finalBounds = L.latLngBounds(startLatLngRef.current, e.latlng);
+            setBounds(finalBounds);
+          } else {
+            setBounds(null);
+          }
+
+          isDrawingRef.current = false;
+          startLatLngRef.current = null;
+          drawBoundsRef.current = null;
+          setDrawBounds(null);
+
+          if (!boxSelectMode && !shiftPressed.current) {
+            map.dragging.enable();
+          }
         }
-        setIsDrawing(false);
-        setStartLatLng(null);
-        map.dragging.enable();
       },
       click(e) {
         handleMapClick(e);
       },
     });
 
-    return bounds ? (
+    const activeBounds = drawBounds || bounds;
+
+    return activeBounds ? (
       <Rectangle
-        bounds={bounds}
+        bounds={activeBounds}
         pathOptions={{
           color: "#4250af",
           weight: 2,
           fillColor: "#4250af",
-          fillOpacity: 0.12,
+          fillOpacity: 0.15,
           dashArray: "6, 6",
         }}
       />
@@ -401,7 +488,9 @@ export default function LeafletGeorefMap(props: Props) {
 
   return (
     <div
-      className={`${styles.mapWrapper} ${isRelocating ? styles.relocateActive : ""}`}
+      className={`${styles.mapWrapper} ${isRelocating ? styles.relocateActive : ""} ${
+        boxSelectMode ? styles.boxSelectActive : ""
+      }`}
     >
       {/* Relocation banner */}
       {isRelocating && (
@@ -539,6 +628,7 @@ export default function LeafletGeorefMap(props: Props) {
               key={it.id}
               center={[lat, lng]}
               radius={isSelected ? 10 : 7}
+              interactive={!isRelocating}
               pathOptions={{
                 color: isSelected ? "#4250af" : color,
                 fillColor: color,

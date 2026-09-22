@@ -10,7 +10,10 @@
   height: 100%;
 }
 
-.relocateActive {
+.relocateActive,
+.relocateActive :global(.leaflet-container),
+.boxSelectActive,
+.boxSelectActive :global(.leaflet-container) {
   cursor: crosshair !important;
 }
 
@@ -296,10 +299,10 @@
   }
 }
 
-/* Floating Map Tools (Left Side) */
+/* Floating Map Tools (Bottom Left Corner) */
 .mapToolGroup {
   position: absolute;
-  top: 16px;
+  bottom: 24px;
   left: 16px;
   display: flex;
   flex-direction: column;
@@ -332,10 +335,10 @@
   }
 }
 
-/* Help Modal */
+/* Help Modal (above bottom-left tools) */
 .helpModal {
   position: absolute;
-  top: 60px;
+  bottom: 80px;
   left: 16px;
   width: 320px;
   background-color: var(--surface);
