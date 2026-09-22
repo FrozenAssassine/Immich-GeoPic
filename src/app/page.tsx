@@ -22,6 +22,10 @@ export default function Home() {
   const [images, setImages] = useState<ImageItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [timespanPreset, setTimespanPreset] = useState<TimespanPreset>("6m");
+  const [zoomCategoryTarget, setZoomCategoryTarget] = useState<{
+    category: "all" | "geotagged" | "unreferenced";
+    timestamp: number;
+  } | null>(null);
 
   // Format dates as YYYY-MM-DD
   const formatDateInput = (date: Date) => date.toISOString().split("T")[0];
@@ -272,6 +276,9 @@ export default function Home() {
         estimatedCount={estimatedCount}
         isLoading={isLoading}
         onRefresh={() => loadImages(startDate, endDate, timespanPreset === "all")}
+        onZoomCategory={(category) =>
+          setZoomCategoryTarget({ category, timestamp: Date.now() })
+        }
       />
 
       {/* Main Map Content */}
@@ -287,6 +294,7 @@ export default function Home() {
           images={images}
           onImagesUpdate={setImages}
           sessionToken={sessionToken}
+          zoomCategoryTarget={zoomCategoryTarget}
         />
 
         {isLoading && (

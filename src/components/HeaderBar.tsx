@@ -34,6 +34,7 @@ export type HeaderBarProps = {
   estimatedCount: number;
   isLoading: boolean;
   onRefresh: () => void;
+  onZoomCategory?: (category: "all" | "geotagged" | "unreferenced") => void;
 };
 
 export default function HeaderBar({
@@ -50,6 +51,7 @@ export default function HeaderBar({
   estimatedCount,
   isLoading,
   onRefresh,
+  onZoomCategory,
 }: HeaderBarProps) {
   const [profileImgError, setProfileImgError] = useState(false);
 
@@ -122,18 +124,36 @@ export default function HeaderBar({
 
         {/* Counter Badges */}
         <div className={styles.counters}>
-          <div className={`${styles.badge} ${styles.total}`} title="Total loaded photos">
+          <button
+            type="button"
+            className={`${styles.badge} ${styles.total}`}
+            onClick={() => onZoomCategory?.("all")}
+            title="Zoom map to all loaded photos"
+            disabled={totalCount === 0}
+          >
             <Layers size={13} />
             <span>{totalCount.toLocaleString()}</span>
-          </div>
-          <div className={`${styles.badge} ${styles.geotagged}`} title="Photos with verified GPS">
+          </button>
+          <button
+            type="button"
+            className={`${styles.badge} ${styles.geotagged}`}
+            onClick={() => onZoomCategory?.("geotagged")}
+            title="Zoom map to photos with verified GPS"
+            disabled={geotaggedCount === 0}
+          >
             <CheckCircle2 size={13} />
             <span>{geotaggedCount.toLocaleString()}</span>
-          </div>
-          <div className={`${styles.badge} ${styles.estimated}`} title="Photos with estimated coordinates">
+          </button>
+          <button
+            type="button"
+            className={`${styles.badge} ${styles.estimated}`}
+            onClick={() => onZoomCategory?.("unreferenced")}
+            title="Zoom map to photos with no GPS position (estimated)"
+            disabled={estimatedCount === 0}
+          >
             <AlertCircle size={13} />
             <span>{estimatedCount.toLocaleString()}</span>
-          </div>
+          </button>
         </div>
 
         {/* Refresh Button */}

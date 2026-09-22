@@ -8,6 +8,9 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    volumes:
+      # Persistent storage for application settings, active & custom base-maps
+      - ./geopic-data:/app/data
     environment:
       # URL to your Immich server (e.g. http://immich-server:2283 or public URL)
       - IMMICH_URL=http://immich-server:2283

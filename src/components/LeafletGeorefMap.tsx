@@ -30,7 +30,10 @@ import {
   Trash2,
   CheckCheck,
   Compass,
+  Layers,
 } from "lucide-react";
+import { BaseMap, BaseMapPreset, DEFAULT_BASEMAP, BASEMAP_PRESETS } from "@/types/BaseMap";
+import BaseMapModal from "@/components/BaseMapModal";
 
 type Props = {
   images: ImageItem[];
@@ -38,6 +41,10 @@ type Props = {
   center?: LatLngExpression;
   zoom?: number;
   sessionToken?: string | null;
+  zoomCategoryTarget?: {
+    category: "all" | "geotagged" | "unreferenced";
+    timestamp: number;
+  } | null;
 };
 
 type EstimatedImageItem = ImageItem & {
@@ -144,16 +151,27 @@ function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
   return out;
 }
 
-interface FitBoundsHelperProps {
+interface CameraControllerProps {
   trigger: number;
   coords: [number, number][];
+  zoomCategoryTarget?: {
+    category: "all" | "geotagged" | "unreferenced";
+    timestamp: number;
+  } | null;
+  computedImages: EstimatedImageItem[];
 }
 
-function FitBoundsHelper({ trigger, coords }: FitBoundsHelperProps) {
+function CameraController({
+  trigger,
+  coords,
+  zoomCategoryTarget,
+  computedImages,
+}: CameraControllerProps) {
   const map = useMap();
   const prevTriggerRef = useRef(0);
   const coordsRef = useRef(coords);
   coordsRef.current = coords;
+  const prevCategoryTargetRef = useRef<number>(0);
 
   useEffect(() => {
     // Only fit bounds if trigger was explicitly incremented and changed
@@ -170,6 +188,66 @@ function FitBoundsHelper({ trigger, coords }: FitBoundsHelperProps) {
     }, 150);
     return () => clearTimeout(timer);
   }, [trigger, map]);
+
+  // Handle category-specific zoom (All, Geotagged, Unreferenced)
+  useEffect(() => {
+    if (
+      !zoomCategoryTarget ||
+      zoomCategoryTarget.timestamp === prevCategoryTargetRef.current
+    ) {
+      return;
+    }
+    prevCategoryTargetRef.current = zoomCategoryTarget.timestamp;
+
+    const { category } = zoomCategoryTarget;
+    const targetCoords: [number, number][] = [];
+
+    if (category === "all") {
+      for (const img of computedImages) {
+        const c = img.coords || img.estCoords;
+        if (c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng)) {
+          targetCoords.push([c.lat, c.lng]);
+        }
+      }
+    } else if (category === "geotagged") {
+      for (const img of computedImages) {
+        if (
+          img.coords &&
+          !Number.isNaN(img.coords.lat) &&
+          !Number.isNaN(img.coords.lng)
+        ) {
+          targetCoords.push([img.coords.lat, img.coords.lng]);
+        }
+      }
+    } else if (category === "unreferenced") {
+      for (const img of computedImages) {
+        if (
+          !img.coords &&
+          img.estCoords &&
+          !Number.isNaN(img.estCoords.lat) &&
+          !Number.isNaN(img.estCoords.lng)
+        ) {
+          targetCoords.push([img.estCoords.lat, img.estCoords.lng]);
+        }
+      }
+    }
+
+    if (targetCoords.length === 0) return;
+
+    map.invalidateSize();
+    if (targetCoords.length === 1) {
+      map.flyTo(targetCoords[0], Math.min(map.getZoom() || 14, 16), {
+        duration: 0.8,
+      });
+    } else {
+      const bounds = L.latLngBounds(targetCoords);
+      map.flyToBounds(bounds, {
+        padding: [60, 60],
+        maxZoom: 16,
+        duration: 0.8,
+      });
+    }
+  }, [zoomCategoryTarget, computedImages, map]);
 
   return null;
 }
@@ -420,6 +498,113 @@ export default function LeafletGeorefMap(props: Props) {
     return h;
   };
 
+  const [baseMaps, setBaseMaps] = useState<BaseMap[]>([DEFAULT_BASEMAP]);
+  const [selectedBaseMapId, setSelectedBaseMapId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("geopic_active_basemap") || DEFAULT_BASEMAP.id;
+    }
+    return DEFAULT_BASEMAP.id;
+  });
+  const [presets, setPresets] = useState<BaseMapPreset[]>(BASEMAP_PRESETS);
+  const [showBaseMapModal, setShowBaseMapModal] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadBaseMaps() {
+      try {
+        const res = await fetch("/api/settings/basemaps", {
+          headers: getAuthHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) {
+            if (Array.isArray(data.baseMaps) && data.baseMaps.length > 0) {
+              setBaseMaps(data.baseMaps);
+            }
+            if (data.selectedId) {
+              setSelectedBaseMapId(data.selectedId);
+              if (typeof window !== "undefined") {
+                localStorage.setItem("geopic_active_basemap", data.selectedId);
+              }
+            }
+            if (Array.isArray(data.presets)) {
+              setPresets(data.presets);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load base maps:", err);
+      }
+    }
+    loadBaseMaps();
+    return () => {
+      isMounted = false;
+    };
+  }, [props.sessionToken]);
+
+  const activeBaseMap = useMemo(() => {
+    return (
+      baseMaps.find((b) => b.id === selectedBaseMapId) ||
+      baseMaps[0] ||
+      DEFAULT_BASEMAP
+    );
+  }, [baseMaps, selectedBaseMapId]);
+
+  const handleSelectBaseMap = async (id: string) => {
+    setSelectedBaseMapId(id);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("geopic_active_basemap", id);
+    }
+    try {
+      await fetch("/api/settings/basemaps", {
+        method: "PATCH",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ selectedId: id }),
+      });
+    } catch (err) {
+      console.error("Failed to persist selected base map:", err);
+    }
+  };
+
+  const handleAddBaseMap = async (newMap: Omit<BaseMap, "id" | "isDefault">) => {
+    const res = await fetch("/api/settings/basemaps", {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(newMap),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || "Failed to add base map");
+    }
+    const data = await res.json();
+    setBaseMaps(data.baseMaps);
+    if (data.selectedId) {
+      setSelectedBaseMapId(data.selectedId);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("geopic_active_basemap", data.selectedId);
+      }
+    }
+  };
+
+  const handleDeleteBaseMap = async (id: string) => {
+    const res = await fetch(`/api/settings/basemaps?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || "Failed to delete base map");
+    }
+    const data = await res.json();
+    setBaseMaps(data.baseMaps);
+    if (data.selectedId) {
+      setSelectedBaseMapId(data.selectedId);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("geopic_active_basemap", data.selectedId);
+      }
+    }
+  };
+
   // Single marker relocation click
   const handleMapClick = async (e: LeafletMouseEvent) => {
     if (!isRelocating || !selectedImage) return;
@@ -585,6 +770,13 @@ export default function LeafletGeorefMap(props: Props) {
           <BoxSelect size={18} />
         </button>
         <button
+          className={`${styles.mapControlBtn} ${showBaseMapModal ? styles.active : ""}`}
+          title="Base Maps & Layers"
+          onClick={() => setShowBaseMapModal(true)}
+        >
+          <Layers size={18} />
+        </button>
+        <button
           className={`${styles.mapControlBtn} ${showHelp ? styles.active : ""}`}
           title="How it works"
           onClick={() => setShowHelp((prev) => !prev)}
@@ -656,8 +848,11 @@ export default function LeafletGeorefMap(props: Props) {
         preferCanvas={true}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          key={activeBaseMap.id}
+          attribution={activeBaseMap.attribution}
+          url={activeBaseMap.url}
+          maxZoom={activeBaseMap.maxZoom ?? 19}
+          subdomains={activeBaseMap.subdomains ?? "abc"}
         />
 
         {/* Route connecting verified GPS points */}
@@ -724,7 +919,12 @@ export default function LeafletGeorefMap(props: Props) {
           setBounds={setBounds}
           onMapClick={handleMapClick}
         />
-        <FitBoundsHelper trigger={fitTrigger} coords={allCoords} />
+        <CameraController
+          trigger={fitTrigger}
+          coords={allCoords}
+          zoomCategoryTarget={props.zoomCategoryTarget}
+          computedImages={computed}
+        />
       </MapContainer>
 
       {/* Photo Inspector Panel */}
@@ -844,6 +1044,18 @@ export default function LeafletGeorefMap(props: Props) {
           </div>
         </div>
       )}
+
+      {/* Base Map Manager Modal */}
+      <BaseMapModal
+        isOpen={showBaseMapModal}
+        onClose={() => setShowBaseMapModal(false)}
+        baseMaps={baseMaps}
+        selectedId={selectedBaseMapId}
+        presets={presets}
+        onSelectBaseMap={handleSelectBaseMap}
+        onAddBaseMap={handleAddBaseMap}
+        onDeleteBaseMap={handleDeleteBaseMap}
+      />
     </div>
   );
 }

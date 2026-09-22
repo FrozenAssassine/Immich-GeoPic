@@ -13,7 +13,13 @@ Immich GeoPic is a modern georeferencing and location management studio for your
 - **Two Flexible Authentication Modes**:
   1. **Zero-Auth Direct Mode** (`IMMICH_API_KEY` set in `.env`): Instant access without user login, ideal for home servers and private intranets.
   2. **Interactive Immich Login** (when `IMMICH_API_KEY` is not set): Users log in with their Immich account (email & password). Supports user profile avatar, username display, and secure logout.
-- **Timespan Selector**: Top bar with quick filters ("1M", "3M", "6M" default, "1Y", "All", and "Custom" date range).
+- **Timespan Selector & Interactive Statistics**:
+  - Top bar with quick filters ("1M", "3M", "6M" default, "1Y", "All", and "Custom" date range).
+  - Interactive status badges: Click on **Total Photos**, **GPS Verified**, or **No GPS Position (Estimated)** to smoothly zoom and pan the map directly to those photos.
+- **Multiple Base-Maps**:
+  - OpenStreetMap is the built-in default.
+  - Easily switch between base maps or add custom tile providers (with one-click presets like Esri Satellite / World Imagery, OpenTopoMap, and CartoDB).
+  - Settings, custom maps, and your active base-map selection are saved to persistent storage and restored across logins.
 - **Intelligent Route & Georeferencing**:
   - **Green Markers**: Confirmed GPS coordinates stored in Immich.
   - **Orange Markers**: Estimated coordinates calculated by linear interpolation between chronological GPS anchors.
@@ -38,6 +44,9 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    volumes:
+      # Persistent volume to store user settings, custom base-maps, and active selections
+      - ./geopic-data:/app/data
     environment:
       # URL to your Immich instance (include protocol and port if custom)
       - IMMICH_URL=http://immich-server:2283
@@ -46,6 +55,9 @@ services:
       # If set, no user login is needed. If omitted, users sign in via email/password.
       - IMMICH_API_KEY=
 ```
+
+> [!NOTE]
+> The `./geopic-data:/app/data` volume ensures custom base-maps and user settings persist across container updates, restarts, and re-logins.
 
 Then run:
 ```bash
