@@ -8,7 +8,7 @@ WORKDIR /app
 # Stage 2: Dependencies
 FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Stage 3: Build
 FROM base AS builder
