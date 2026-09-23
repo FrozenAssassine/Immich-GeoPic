@@ -11,6 +11,7 @@ import {
   useMapEvents,
   TileLayer,
   CircleMarker,
+  Circle,
   Polyline,
   Rectangle,
   useMap,
@@ -35,9 +36,15 @@ import {
   Layers,
   Route,
   UploadCloud,
+  Crosshair,
+  CircleDot,
+  BookmarkPlus,
 } from "lucide-react";
 import { BaseMap, BaseMapPreset, DEFAULT_BASEMAP, BASEMAP_PRESETS } from "@/types/BaseMap";
+import { VirtualGroup } from "@/types/VirtualGroup";
 import BaseMapModal from "@/components/BaseMapModal";
+import GroupsModal from "@/components/GroupsModal";
+import MixedSelectionDialog from "@/components/MixedSelectionDialog";
 
 type Props = {
   images: ImageItem[];
@@ -350,6 +357,8 @@ interface RectangleDrawerProps {
   boxSelectMode: boolean;
   isRelocating: boolean;
   setIsRelocating: (val: boolean) => void;
+  isPickingGroupPos?: boolean;
+  setIsPickingGroupPos?: (val: boolean) => void;
   bounds: LatLngBounds | null;
   setBounds: (bounds: LatLngBounds | null) => void;
   onMapClick: (e: LeafletMouseEvent) => void;
@@ -359,6 +368,8 @@ function RectangleDrawer({
   boxSelectMode,
   isRelocating,
   setIsRelocating,
+  isPickingGroupPos = false,
+  setIsPickingGroupPos,
   bounds,
   setBounds,
   onMapClick,
@@ -376,6 +387,9 @@ function RectangleDrawer({
   const isRelocatingRef = useRef(isRelocating);
   isRelocatingRef.current = isRelocating;
 
+  const isPickingGroupPosRef = useRef(isPickingGroupPos);
+  isPickingGroupPosRef.current = isPickingGroupPos;
+
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
 
@@ -384,6 +398,9 @@ function RectangleDrawer({
 
   const setIsRelocatingRef = useRef(setIsRelocating);
   setIsRelocatingRef.current = setIsRelocating;
+
+  const setIsPickingGroupPosRef = useRef(setIsPickingGroupPos);
+  setIsPickingGroupPosRef.current = setIsPickingGroupPos;
 
   // Disable map panning when boxSelectMode is active
   useEffect(() => {
@@ -402,6 +419,9 @@ function RectangleDrawer({
       }
       if (e.key === "Escape") {
         setIsRelocatingRef.current(false);
+        if (setIsPickingGroupPosRef.current) {
+          setIsPickingGroupPosRef.current(false);
+        }
         setBoundsRef.current(null);
         setDrawBounds(null);
         drawBoundsRef.current = null;
@@ -450,7 +470,7 @@ function RectangleDrawer({
 
   useMapEvents({
     mousedown(e) {
-      if (isRelocatingRef.current) return;
+      if (isRelocatingRef.current || isPickingGroupPosRef.current) return;
       if (shiftPressed.current || boxSelectModeRef.current) {
         isDrawingRef.current = true;
         startLatLngRef.current = e.latlng;
@@ -492,7 +512,7 @@ function RectangleDrawer({
       }
     },
     click(e) {
-      if (isRelocatingRef.current && e.originalEvent) {
+      if ((isRelocatingRef.current || isPickingGroupPosRef.current) && e.originalEvent) {
         // Calculate true geographic coordinates from mouse position so it never snaps to marker centers
         const trueLatLng = map.mouseEventToLatLng(e.originalEvent);
         onMapClickRef.current({ ...e, latlng: trueLatLng });
@@ -521,25 +541,28 @@ function RectangleDrawer({
 
 interface RelocationInteractivityControllerProps {
   isRelocating: boolean;
+  isPickingGroupPos?: boolean;
   images: ImageItem[];
 }
 
 function RelocationInteractivityController({
   isRelocating,
+  isPickingGroupPos = false,
   images,
 }: RelocationInteractivityControllerProps) {
   const map = useMap();
+  const isClickThrough = isRelocating || isPickingGroupPos;
 
   useEffect(() => {
     map.eachLayer((layer: any) => {
       const pathEl = (layer as { _path?: SVGElement })._path;
-      if (layer instanceof L.CircleMarker) {
-        layer.options.interactive = !isRelocating;
-        if (isRelocating && typeof layer.closeTooltip === "function") {
+      if (layer instanceof L.CircleMarker || layer instanceof L.Circle) {
+        layer.options.interactive = !isClickThrough;
+        if (isClickThrough && typeof layer.closeTooltip === "function") {
           layer.closeTooltip();
         }
         if (pathEl) {
-          if (isRelocating) {
+          if (isClickThrough) {
             pathEl.classList.remove("leaflet-interactive");
             pathEl.style.pointerEvents = "none";
           } else {
@@ -557,7 +580,7 @@ function RelocationInteractivityController({
     });
 
     const container = map.getContainer();
-    if (isRelocating) {
+    if (isClickThrough) {
       container.classList.add("leaflet-crosshair");
       const canvas = container.querySelector("canvas");
       if (canvas) {
@@ -566,8 +589,28 @@ function RelocationInteractivityController({
     } else {
       container.classList.remove("leaflet-crosshair");
     }
-  }, [isRelocating, images, map]);
+  }, [isClickThrough, images, map]);
 
+  return null;
+}
+
+function MapCenterTracker({
+  onCenterChange,
+}: {
+  onCenterChange: (center: { lat: number; lng: number }) => void;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    const updateCenter = () => {
+      const c = map.getCenter();
+      onCenterChange({ lat: c.lat, lng: c.lng });
+    };
+    updateCenter();
+    map.on("moveend", updateCenter);
+    return () => {
+      map.off("moveend", updateCenter);
+    };
+  }, [map, onCenterChange]);
   return null;
 }
 
@@ -580,6 +623,27 @@ export default function LeafletGeorefMap(props: Props) {
   const [showHelp, setShowHelp] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isImageEnlarged, setIsImageEnlarged] = useState(false);
+
+  // Virtual Marker Groups state
+  const [groups, setGroups] = useState<VirtualGroup[]>([]);
+  const [showGroupsModal, setShowGroupsModal] = useState(false);
+  const [showGroupsOnMap, setShowGroupsOnMap] = useState(true);
+  const [isPickingGroupPos, setIsPickingGroupPos] = useState(false);
+  const [pickedGroupCoords, setPickedGroupCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [currentMapCenter, setCurrentMapCenter] = useState<{ lat: number; lng: number } | null>(null);
+  const [mixedDialogState, setMixedDialogState] = useState<{
+    isOpen: boolean;
+    group: VirtualGroup | null;
+    photos: MapDisplayItem[];
+    fixedCount: number;
+    estimatedCount: number;
+  }>({
+    isOpen: false,
+    group: null,
+    photos: [],
+    fixedCount: 0,
+    estimatedCount: 0,
+  });
 
   // Close enlarged image modal on Escape key
   useEffect(() => {
@@ -650,6 +714,9 @@ export default function LeafletGeorefMap(props: Props) {
   const continuousPolylinePositions: LatLngExpression[] = useMemo(() => {
     const pos: [number, number][] = [];
     for (let i = 0; i < computed.length; i++) {
+      if (computed[i].isGpx && computed[i].id.startsWith("gpx_internal_estimated")) {
+        continue;
+      }
       const c = computed[i].coords || computed[i].estCoords;
       if (
         c &&
@@ -947,13 +1014,197 @@ export default function LeafletGeorefMap(props: Props) {
     }
   };
 
+  // Groups management and loaders
+  const loadGroups = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/groups", { headers: getAuthHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setGroups(data.groups || []);
+      }
+    } catch (err) {
+      console.error("Failed to load groups:", err);
+    }
+  }, [props.sessionToken]);
+
+  useEffect(() => {
+    loadGroups();
+  }, [loadGroups]);
+
+  const handleSaveGroup = async (
+    groupInput: Omit<VirtualGroup, "id" | "createdAt"> & { id?: string }
+  ) => {
+    const isEdit = Boolean(groupInput.id);
+    const res = await fetch("/api/groups", {
+      method: isEdit ? "PATCH" : "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(groupInput),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to save group");
+    }
+    await loadGroups();
+  };
+
+  const handleDeleteGroup = async (id: string) => {
+    const res = await fetch(`/api/groups?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to delete group");
+    }
+    await loadGroups();
+  };
+
+  const handleZoomToGroup = (group: VirtualGroup) => {
+    if (group.radius > 0) {
+      const latDelta = (group.radius / 111320) * 1.2;
+      const lngDelta =
+        (group.radius / Math.max(1, 111320 * Math.cos((group.lat * Math.PI) / 180))) * 1.2;
+      const b = L.latLngBounds([
+        [group.lat - latDelta, group.lng - lngDelta],
+        [group.lat + latDelta, group.lng + lngDelta],
+      ]);
+      setFlyToBoundsTarget(b);
+    } else {
+      const b = L.latLngBounds([
+        [group.lat - 0.005, group.lng - 0.005],
+        [group.lat + 0.005, group.lng + 0.005],
+      ]);
+      setFlyToBoundsTarget(b);
+    }
+  };
+
+  const handleAssignSinglePhotoToGroup = async (photo: MapDisplayItem, group: VirtualGroup) => {
+    setIsUpdating(true);
+    try {
+      const res = await fetch("/api/groups/assign", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          groupId: group.id,
+          photos: [{ id: photo.id, timestamp: photo.timestamp, hasCoords: hasValidCoords(photo) }],
+          applyTo: "all",
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to assign photo to group");
+      }
+
+      const data = await res.json();
+      const updatedMap = new Map<string, { id: string; coords?: { lat: number; lng: number }; estCoords?: { lat: number; lng: number } }>(
+        (data.updatedPhotos || []).map((p: any) => [p.id, p])
+      );
+
+      const updated = images.map((img) => {
+        const update = updatedMap.get(img.id);
+        if (update) {
+          const { estimated, estCoords, ...clean } = img as MapDisplayItem;
+          if (data.directFix) {
+            return { ...clean, coords: update.coords };
+          } else {
+            return { ...clean, coords: undefined, estimated: true, estCoords: update.estCoords };
+          }
+        }
+        return img;
+      });
+
+      updateImages(updated);
+      await loadGpxTracks();
+    } catch (err) {
+      console.error("Failed to assign photo to group:", err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleAssignBatchToGroup = (photos: MapDisplayItem[], group: VirtualGroup) => {
+    if (photos.length === 0) return;
+
+    const fixedCount = photos.filter((p) => hasValidCoords(p)).length;
+    const estimatedCount = photos.length - fixedCount;
+
+    if (!group.directFix && fixedCount > 0 && estimatedCount > 0) {
+      // Mixed selection when assigning to estimated group: prompt user!
+      setMixedDialogState({
+        isOpen: true,
+        group,
+        photos,
+        fixedCount,
+        estimatedCount,
+      });
+      return;
+    }
+
+    executeBatchAssign(photos, group, "all");
+  };
+
+  const executeBatchAssign = async (
+    photos: MapDisplayItem[],
+    group: VirtualGroup,
+    applyTo: "all" | "estimatedOnly"
+  ) => {
+    setIsUpdating(true);
+    try {
+      const res = await fetch("/api/groups/assign", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          groupId: group.id,
+          photos: photos.map((p) => ({
+            id: p.id,
+            timestamp: p.timestamp,
+            hasCoords: hasValidCoords(p),
+          })),
+          applyTo,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to assign photos to group");
+      }
+
+      const data = await res.json();
+      const updatedMap = new Map<string, { id: string; coords?: { lat: number; lng: number }; estCoords?: { lat: number; lng: number } }>(
+        (data.updatedPhotos || []).map((p: any) => [p.id, p])
+      );
+
+      const updated = images.map((img) => {
+        const update = updatedMap.get(img.id);
+        if (update) {
+          const { estimated, estCoords, ...clean } = img as MapDisplayItem;
+          if (data.directFix) {
+            return { ...clean, coords: update.coords };
+          } else {
+            return { ...clean, coords: undefined, estimated: true, estCoords: update.estCoords };
+          }
+        }
+        return img;
+      });
+
+      updateImages(updated);
+      setBounds(null);
+      await loadGpxTracks();
+    } catch (err) {
+      console.error("Failed to assign photos to group:", err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const handleMapDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
     setIsDraggingGpx(false);
 
-    if (showBaseMapModal) return;
+    if (showBaseMapModal || showGroupsModal) return;
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       for (let i = 0; i < e.dataTransfer.files.length; i++) {
@@ -980,8 +1231,15 @@ export default function LeafletGeorefMap(props: Props) {
     }
   };
 
-  // Single marker relocation click
+  // Single marker relocation click & group position pick
   const handleMapClick = async (e: LeafletMouseEvent) => {
+    if (isPickingGroupPos) {
+      setIsPickingGroupPos(false);
+      setPickedGroupCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
+      setShowGroupsModal(true);
+      return;
+    }
+
     if (!isRelocating || !selectedImage) return;
 
     const { lat, lng } = e.latlng;
@@ -1200,6 +1458,23 @@ export default function LeafletGeorefMap(props: Props) {
         </div>
       )}
 
+      {/* Pick Group Position Banner */}
+      {isPickingGroupPos && (
+        <div className={styles.relocateBanner}>
+          <Crosshair size={18} className="animate-pulse" />
+          <span>Click anywhere on the map to set the group position</span>
+          <button
+            className={styles.cancelBtn}
+            onClick={() => {
+              setIsPickingGroupPos(false);
+              setShowGroupsModal(true);
+            }}
+          >
+            Cancel (Esc)
+          </button>
+        </div>
+      )}
+
       {/* Floating Map Tools (Left Side) */}
       <div className={styles.mapToolGroup}>
         <button
@@ -1223,6 +1498,13 @@ export default function LeafletGeorefMap(props: Props) {
           style={{ display: "none" }}
           onChange={handleQuickFileInputChange}
         />
+        <button
+          className={`${styles.mapControlBtn} ${showGroupsModal ? styles.active : ""}`}
+          title="Virtual Marker Groups"
+          onClick={() => setShowGroupsModal(true)}
+        >
+          <BookmarkPlus size={18} />
+        </button>
         <button
           className={`${styles.mapControlBtn} ${visibleGpxTracks.length > 0 ? styles.active : ""}`}
           title="GPX Tracks & Upload"
@@ -1274,6 +1556,9 @@ export default function LeafletGeorefMap(props: Props) {
             <li>
               <strong>Box Select:</strong> Hold <kbd>Shift</kbd> (or click the box icon) and drag on the map to select multiple estimated photos and fix them simultaneously.
             </li>
+            <li>
+              <strong>Groups:</strong> Use Virtual Marker Groups to instantly move single or batch photos to predefined locations or areas.
+            </li>
           </ul>
         </div>
       )}
@@ -1297,6 +1582,30 @@ export default function LeafletGeorefMap(props: Props) {
               <span>Fix {estimatedInBounds.length} Estimated</span>
             </button>
           )}
+
+          {/* Quick Groups assignment for multi-selection */}
+          {groups.length > 0 && selectedItemsInBounds.length > 0 && (
+            <div className={styles.selectionGroups}>
+              <span className={styles.selectionGroupsLabel}>Group:</span>
+              {groups.map((g) => (
+                <button
+                  key={g.id}
+                  className={`${styles.selectionGroupChip} ${
+                    g.directFix ? styles.directFix : styles.estimated
+                  }`}
+                  onClick={() => handleAssignBatchToGroup(selectedItemsInBounds, g)}
+                  disabled={isUpdating}
+                  title={`Move ${selectedItemsInBounds.length} photos to ${g.name} (${
+                    g.radius > 0 ? "Area" : "Marker"
+                  } - ${g.directFix ? "Direct Fix" : "Estimated"})`}
+                >
+                  {g.radius > 0 ? <CircleDot size={11} /> : <MapPin size={11} />}
+                  <span>{g.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <button
             className={`${styles.toolBtn} ${styles.clear}`}
             onClick={() => setBounds(null)}
@@ -1379,14 +1688,68 @@ export default function LeafletGeorefMap(props: Props) {
           );
         })}
 
+        {/* Virtual Marker Groups & Areas */}
+        {showGroupsOnMap &&
+          groups.map((g) => {
+            const color = g.directFix ? "#10b981" : "#f59e0b";
+            if (g.radius > 0) {
+              return (
+                <Circle
+                  key={`group_${g.id}`}
+                  center={[g.lat, g.lng]}
+                  radius={g.radius}
+                  pathOptions={{
+                    color,
+                    fillColor: color,
+                    fillOpacity: 0.12,
+                    weight: 2,
+                    dashArray: "5, 5",
+                  }}
+                  interactive={!isRelocating && !isPickingGroupPos}
+                >
+                  <Tooltip direction="top" offset={[0, -6]}>
+                    <span>
+                      ⭕ {g.name} (Area: {g.radius >= 1000 ? `${(g.radius / 1000).toFixed(1)} km` : `${g.radius} m`} · {g.directFix ? "Direct Fix" : "Estimated"})
+                    </span>
+                  </Tooltip>
+                </Circle>
+              );
+            }
+
+            return (
+              <CircleMarker
+                key={`group_${g.id}`}
+                center={[g.lat, g.lng]}
+                radius={9}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.5,
+                  weight: 2,
+                  dashArray: "3, 3",
+                }}
+                interactive={!isRelocating && !isPickingGroupPos}
+              >
+                <Tooltip direction="top" offset={[0, -8]}>
+                  <span>
+                    📍 {g.name} (Marker · {g.directFix ? "Direct Fix" : "Estimated"})
+                  </span>
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+
         <RelocationInteractivityController
           isRelocating={isRelocating}
+          isPickingGroupPos={isPickingGroupPos}
           images={images}
         />
         <RectangleDrawer
           boxSelectMode={boxSelectMode}
           isRelocating={isRelocating}
           setIsRelocating={setIsRelocating}
+          isPickingGroupPos={isPickingGroupPos}
+          setIsPickingGroupPos={setIsPickingGroupPos}
           bounds={bounds}
           setBounds={setBounds}
           onMapClick={handleMapClick}
@@ -1399,6 +1762,7 @@ export default function LeafletGeorefMap(props: Props) {
           flyToBoundsTarget={flyToBoundsTarget}
           onClearFlyTarget={() => setFlyToBoundsTarget(null)}
         />
+        <MapCenterTracker onCenterChange={setCurrentMapCenter} />
       </MapContainer>
 
       {/* Photo Inspector Panel */}
@@ -1535,6 +1899,39 @@ export default function LeafletGeorefMap(props: Props) {
               </button>
             )}
           </div>
+
+          {/* Quick Assign to Group (Bottom of preview) */}
+          {groups.length > 0 && (
+            <div className={styles.groupsSection}>
+              <div className={styles.groupsHeader}>
+                <span>Quick Assign to Group</span>
+                <button
+                  type="button"
+                  className={styles.groupsManageBtn}
+                  onClick={() => setShowGroupsModal(true)}
+                  title="Manage Groups"
+                >
+                  Manage
+                </button>
+              </div>
+              <div className={styles.groupsList}>
+                {groups.map((g) => (
+                  <button
+                    key={g.id}
+                    className={`${styles.groupChip} ${g.directFix ? styles.directFix : styles.estimated}`}
+                    onClick={() => handleAssignSinglePhotoToGroup(selectedImage, g)}
+                    disabled={isUpdating}
+                    title={`${g.name} (${g.radius > 0 ? "Area" : "Marker"} - ${
+                      g.directFix ? "Direct Fix" : "Estimated"
+                    })`}
+                  >
+                    {g.radius > 0 ? <CircleDot size={12} /> : <MapPin size={12} />}
+                    <span>{g.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1555,6 +1952,52 @@ export default function LeafletGeorefMap(props: Props) {
         onDeleteGpxTrack={handleDeleteGpxTrack}
         onZoomToGpxTrack={handleZoomToGpxTrack}
         initialTab={activeModalTab}
+      />
+
+      {/* Groups / Virtual Markers Modal */}
+      <GroupsModal
+        isOpen={showGroupsModal}
+        onClose={() => setShowGroupsModal(false)}
+        groups={groups}
+        onSaveGroup={handleSaveGroup}
+        onDeleteGroup={handleDeleteGroup}
+        onZoomToGroup={handleZoomToGroup}
+        mapCenter={currentMapCenter || undefined}
+        onStartPickOnMap={() => {
+          setShowGroupsModal(false);
+          setIsPickingGroupPos(true);
+        }}
+        pickedCoords={pickedGroupCoords}
+        onClearPickedCoords={() => setPickedGroupCoords(null)}
+      />
+
+      {/* Mixed Selection Confirmation Dialog */}
+      <MixedSelectionDialog
+        isOpen={mixedDialogState.isOpen}
+        onClose={() =>
+          setMixedDialogState({
+            isOpen: false,
+            group: null,
+            photos: [],
+            fixedCount: 0,
+            estimatedCount: 0,
+          })
+        }
+        groupName={mixedDialogState.group?.name || ""}
+        fixedCount={mixedDialogState.fixedCount}
+        estimatedCount={mixedDialogState.estimatedCount}
+        onConfirm={(applyTo) => {
+          if (mixedDialogState.group && mixedDialogState.photos.length > 0) {
+            executeBatchAssign(mixedDialogState.photos, mixedDialogState.group, applyTo);
+          }
+          setMixedDialogState({
+            isOpen: false,
+            group: null,
+            photos: [],
+            fixedCount: 0,
+            estimatedCount: 0,
+          });
+        }}
       />
 
       {/* Large Image Lightbox Modal */}

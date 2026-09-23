@@ -267,9 +267,12 @@ export async function getUserTrackPoints(userId: string | undefined, trackId: st
   return [];
 }
 
+import { getInternalGpxTrack } from "./internalGpx";
+
 /**
  * Returns all visible tracks for the user with their parsed points.
  * For URL tracks, downloads fresh from remote URL server-side on every call (providing live updates).
+ * Also appends internal_estimated.gpx (with isInternal: true) for photo position estimation.
  */
 export async function getVisibleUserTracksWithPoints(userId?: string): Promise<GpxTrackWithPoints[]> {
   const tracks = await getUserTracks(userId);
@@ -325,5 +328,17 @@ export async function getVisibleUserTracksWithPoints(userId?: string): Promise<G
     );
   }
 
+  // Load hidden internal estimated GPX track for automatic photo alignment
+  try {
+    const internalTrack = await getInternalGpxTrack(userId);
+    if (internalTrack && internalTrack.points.length > 0) {
+      internalTrack.isInternal = true;
+      results.push(internalTrack);
+    }
+  } catch (err) {
+    console.error("[GeoPic GPX] Failed to read internal estimated GPX:", err);
+  }
+
   return results;
 }
+

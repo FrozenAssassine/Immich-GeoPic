@@ -5,6 +5,8 @@ export interface GpxPoint {
   lng: number;
   time: number; // UTC millisecond epoch
   ele?: number;
+  name?: string;
+  desc?: string;
 }
 
 export interface GpxBounds {
@@ -28,6 +30,7 @@ export interface GpxTrackMetadata {
   endTime?: string;
   bounds?: GpxBounds;
   isVisible: boolean;
+  isInternal?: boolean;
   lastFetchedAt?: string;
   fetchError?: string;
 }

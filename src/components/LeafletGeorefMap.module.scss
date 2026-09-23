@@ -369,6 +369,149 @@
   }
 }
 
+/* Groups Quick Select in Photo Inspector */
+.groupsSection {
+  padding: 10px 16px 14px 16px;
+  border-top: 1px solid var(--surface-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background-color: var(--surface);
+}
+
+.groupsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.groupsManageBtn {
+  background: transparent;
+  border: none;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+
+  &:hover {
+    background-color: var(--surface-hover);
+    text-decoration: underline;
+  }
+}
+
+.groupsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.groupChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+
+  &.directFix {
+    background-color: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.35);
+    color: #10b981;
+
+    &:hover {
+      background-color: #10b981;
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+  }
+
+  &.estimated {
+    background-color: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #f59e0b;
+
+    &:hover {
+      background-color: #f59e0b;
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+}
+
+/* Multi-Selection Box Groups */
+.selectionGroups {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--surface-border);
+  flex-wrap: wrap;
+}
+
+.selectionGroupsLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.selectionGroupChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+
+  &.directFix {
+    background-color: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.35);
+    color: #10b981;
+
+    &:hover {
+      background-color: #10b981;
+      color: #ffffff;
+    }
+  }
+
+  &.estimated {
+    background-color: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #f59e0b;
+
+    &:hover {
+      background-color: #f59e0b;
+      color: #ffffff;
+    }
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
 /* Floating Map Tools (Bottom Left Corner) */
 .mapToolGroup {
   position: absolute;
