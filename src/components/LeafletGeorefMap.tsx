@@ -557,6 +557,20 @@ function RelocationInteractivityController({
     map.eachLayer((layer: any) => {
       const pathEl = (layer as { _path?: SVGElement })._path;
       if (layer instanceof L.CircleMarker || layer instanceof L.Circle) {
+        const isGroupLayer =
+          (layer.options as any)?.isGroupLayer ||
+          (layer.options as any)?.className?.includes("groupShape") ||
+          (pathEl && pathEl.classList.contains(styles.groupShape));
+
+        if (isGroupLayer) {
+          layer.options.interactive = false;
+          if (pathEl) {
+            pathEl.classList.remove("leaflet-interactive");
+            pathEl.style.pointerEvents = "none";
+          }
+          return;
+        }
+
         layer.options.interactive = !isClickThrough;
         if (isClickThrough && typeof layer.closeTooltip === "function") {
           layer.closeTooltip();
@@ -1646,7 +1660,69 @@ export default function LeafletGeorefMap(props: Props) {
           />
         )}
 
-        {/* Photo Markers - rendered only for actual photos, never for GPX track points */}
+        {/* Virtual Marker Groups & Areas (Rendered below photo markers and always click-through) */}
+        {showGroupsOnMap &&
+          groups.map((g) => {
+            const color = g.directFix ? "#10b981" : "#f59e0b";
+            if (g.radius > 0) {
+              return (
+                <Circle
+                  key={`group_${g.id}`}
+                  center={[g.lat, g.lng]}
+                  radius={g.radius}
+                  interactive={false}
+                  pathOptions={{
+                    color,
+                    fillColor: color,
+                    fillOpacity: 0.12,
+                    weight: 2,
+                    dashArray: "5, 5",
+                    className: styles.groupShape,
+                  }}
+                >
+                  <Tooltip
+                    permanent
+                    direction="center"
+                    className={styles.groupTooltip}
+                  >
+                    <span>
+                      ⭕ {g.name}
+                    </span>
+                  </Tooltip>
+                </Circle>
+              );
+            }
+
+            return (
+              <CircleMarker
+                key={`group_${g.id}`}
+                center={[g.lat, g.lng]}
+                radius={9}
+                interactive={false}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.5,
+                  weight: 2,
+                  dashArray: "3, 3",
+                  className: styles.groupShape,
+                }}
+              >
+                <Tooltip
+                  permanent
+                  direction="top"
+                  offset={[0, -10]}
+                  className={styles.groupTooltip}
+                >
+                  <span>
+                    📍 {g.name}
+                  </span>
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+
+        {/* Photo Markers - rendered on top so they are always clickable */}
         {photoItems.map((it) => {
           const isVerified = !!it.coords;
           const lat = isVerified ? it.coords!.lat : it.estCoords?.lat;
@@ -1687,57 +1763,6 @@ export default function LeafletGeorefMap(props: Props) {
             </CircleMarker>
           );
         })}
-
-        {/* Virtual Marker Groups & Areas */}
-        {showGroupsOnMap &&
-          groups.map((g) => {
-            const color = g.directFix ? "#10b981" : "#f59e0b";
-            if (g.radius > 0) {
-              return (
-                <Circle
-                  key={`group_${g.id}`}
-                  center={[g.lat, g.lng]}
-                  radius={g.radius}
-                  pathOptions={{
-                    color,
-                    fillColor: color,
-                    fillOpacity: 0.12,
-                    weight: 2,
-                    dashArray: "5, 5",
-                  }}
-                  interactive={!isRelocating && !isPickingGroupPos}
-                >
-                  <Tooltip direction="top" offset={[0, -6]}>
-                    <span>
-                      ⭕ {g.name} (Area: {g.radius >= 1000 ? `${(g.radius / 1000).toFixed(1)} km` : `${g.radius} m`} · {g.directFix ? "Direct Fix" : "Estimated"})
-                    </span>
-                  </Tooltip>
-                </Circle>
-              );
-            }
-
-            return (
-              <CircleMarker
-                key={`group_${g.id}`}
-                center={[g.lat, g.lng]}
-                radius={9}
-                pathOptions={{
-                  color,
-                  fillColor: color,
-                  fillOpacity: 0.5,
-                  weight: 2,
-                  dashArray: "3, 3",
-                }}
-                interactive={!isRelocating && !isPickingGroupPos}
-              >
-                <Tooltip direction="top" offset={[0, -8]}>
-                  <span>
-                    📍 {g.name} (Marker · {g.directFix ? "Direct Fix" : "Estimated"})
-                  </span>
-                </Tooltip>
-              </CircleMarker>
-            );
-          })}
 
         <RelocationInteractivityController
           isRelocating={isRelocating}
