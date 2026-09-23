@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@photostructure/tz-lookup": "^11.7.0",
     "leaflet": "^1.9.4",
     "leaflet-defaulticon-compatibility": "^0.1.2",
     "lucide-react": "^1.47.0",

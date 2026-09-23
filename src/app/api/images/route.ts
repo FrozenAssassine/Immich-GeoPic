@@ -60,6 +60,8 @@ export async function GET(req: NextRequest) {
         city: asset.exifInfo?.city || undefined,
         country: asset.exifInfo?.country || undefined,
         thumbUrl: `/api/images/${asset.id}/thumbnail`,
+        timeZone: asset.exifInfo?.timeZone || undefined,
+        localDateTime: asset.localDateTime || asset.exifInfo?.dateTimeOriginal || undefined,
       };
     });
 

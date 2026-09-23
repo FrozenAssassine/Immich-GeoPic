@@ -401,3 +401,58 @@
     transform: translateX(0);
   }
 }
+
+.dragOverlay {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(66, 80, 175, 0.45);
+  backdrop-filter: blur(6px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.dragOverlayContent {
+  background-color: var(--surface);
+  border: 2px dashed var(--primary);
+  border-radius: var(--radius-lg);
+  padding: 36px 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  color: var(--text-primary);
+
+  h3 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  p {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 300px;
+  }
+}
+
+.dragIcon {
+  color: var(--primary);
+  animation: bounce 1s infinite alternate ease-in-out;
+}
+
+@keyframes bounce {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-8px);
+  }
+}
+

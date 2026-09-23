@@ -10,4 +10,6 @@ export type ImageItem = {
     city?: string;
     country?: string;
     thumbUrl?: string;
+    timeZone?: string | null;
+    localDateTime?: string | null;
 };

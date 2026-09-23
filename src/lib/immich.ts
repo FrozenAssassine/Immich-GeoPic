@@ -16,12 +16,14 @@ export type ImmichAsset = {
   originalFileName: string;
   fileCreatedAt: string;
   dateTimeOriginal?: string | null;
+  localDateTime?: string | null;
   exifInfo?: {
     dateTimeOriginal?: string | null;
     latitude?: number | null;
     longitude?: number | null;
     city?: string | null;
     country?: string | null;
+    timeZone?: string | null;
   } | null;
 };
 

@@ -17,6 +17,8 @@ import {
   Tooltip,
 } from "react-leaflet";
 import { ImageItem } from "@/types/ImageItem";
+import { GpxPoint, GpxTrackMetadata, GpxTrackWithPoints } from "@/types/GpxTrack";
+import { getTimezoneForCoords, resolvePhotoTimeMs } from "@/lib/timezone";
 import L from "leaflet";
 import {
   X,
@@ -31,6 +33,8 @@ import {
   CheckCheck,
   Compass,
   Layers,
+  Route,
+  UploadCloud,
 } from "lucide-react";
 import { BaseMap, BaseMapPreset, DEFAULT_BASEMAP, BASEMAP_PRESETS } from "@/types/BaseMap";
 import BaseMapModal from "@/components/BaseMapModal";
@@ -50,6 +54,7 @@ type Props = {
 type EstimatedImageItem = ImageItem & {
   estimated?: boolean;
   estCoords?: { lat: number; lng: number };
+  resolvedTime?: number;
 };
 
 function parseTimeMs(timestamp: string): number {
@@ -91,80 +96,129 @@ function deterministicOffset(id: string, salt: number, scale = 0.001): number {
   return normalized * scale;
 }
 
-function computeEstimatedPositions(items: ImageItem[]): EstimatedImageItem[] {
+function computeEstimatedPositions(
+  items: ImageItem[],
+  gpxPoints: GpxPoint[] = []
+): EstimatedImageItem[] {
   if (!Array.isArray(items) || items.length === 0) return [];
 
-  const n = items.length;
-  // Create clean shallow clones stripped of stale estimation properties
-  // so we never mutate the original objects in React state.
-  const out: EstimatedImageItem[] = items
+  // Determine timezone from GPX points if present, or from geotagged photos
+  let inferredTz: string | null = null;
+  if (gpxPoints.length > 0) {
+    inferredTz = getTimezoneForCoords(gpxPoints[0].lat, gpxPoints[0].lng);
+  }
+  if (!inferredTz) {
+    const geoItem = items.find(hasValidCoords);
+    if (geoItem?.coords) {
+      inferredTz = getTimezoneForCoords(geoItem.coords.lat, geoItem.coords.lng);
+    }
+  }
+
+  // Create clean shallow clones with resolved UTC times
+  const out: (EstimatedImageItem & { resolvedTime: number })[] = items
     .map((item) => {
       const { estimated, estCoords, ...cleanItem } = item as EstimatedImageItem;
+      const resolvedTime = resolvePhotoTimeMs(cleanItem, inferredTz);
       return {
         ...cleanItem,
+        resolvedTime,
         estimated: false,
         estCoords: undefined,
       };
     })
-    .sort((a, b) => parseTimeMs(a.timestamp) - parseTimeMs(b.timestamp));
+    .sort((a, b) => a.resolvedTime - b.resolvedTime);
 
-  // Pass 1: Forward scan - find previous geotagged photo index for each photo
-  const prevGeoIndex = new Int32Array(n);
-  let lastGeo = -1;
-  for (let i = 0; i < n; i++) {
-    prevGeoIndex[i] = lastGeo;
-    if (hasValidCoords(out[i])) {
-      lastGeo = i;
+  // Combine verified photos and GPX points into a unified sorted reference list
+  interface RefPoint {
+    lat: number;
+    lng: number;
+    time: number;
+  }
+
+  const refPoints: RefPoint[] = [];
+
+  for (const item of out) {
+    if (hasValidCoords(item)) {
+      refPoints.push({
+        lat: item.coords!.lat,
+        lng: item.coords!.lng,
+        time: item.resolvedTime,
+      });
     }
   }
 
-  // Pass 2: Backward scan - find next geotagged photo index for each photo
-  const nextGeoIndex = new Int32Array(n);
-  lastGeo = -1;
-  for (let i = n - 1; i >= 0; i--) {
-    nextGeoIndex[i] = lastGeo;
-    if (hasValidCoords(out[i])) {
-      lastGeo = i;
-    }
+  for (const pt of gpxPoints) {
+    refPoints.push({
+      lat: pt.lat,
+      lng: pt.lng,
+      time: pt.time,
+    });
   }
 
-  // Pass 3: Estimate unlocated photo coordinates in O(1) per photo
-  for (let i = 0; i < n; i++) {
+  refPoints.sort((a, b) => a.time - b.time);
+
+  // Binary search helper to find enclosing reference points for a given timestamp
+  const findEnclosingRefPoints = (time: number) => {
+    let low = 0;
+    let high = refPoints.length - 1;
+    let prevIdx = -1;
+    let nextIdx = -1;
+
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (refPoints[mid].time === time) {
+        return { prev: refPoints[mid], next: refPoints[mid] };
+      } else if (refPoints[mid].time < time) {
+        prevIdx = mid;
+        low = mid + 1;
+      } else {
+        nextIdx = mid;
+        high = mid - 1;
+      }
+    }
+
+    return {
+      prev: prevIdx !== -1 ? refPoints[prevIdx] : undefined,
+      next: nextIdx !== -1 ? refPoints[nextIdx] : undefined,
+    };
+  };
+
+  // Estimate unlocated photos
+  for (let i = 0; i < out.length; i++) {
     if (hasValidCoords(out[i])) {
       out[i].estimated = false;
       out[i].estCoords = undefined;
       continue;
     }
 
-    const prevIndex = prevGeoIndex[i];
-    const nextIndex = nextGeoIndex[i];
+    if (refPoints.length === 0) {
+      out[i].estimated = true;
+      out[i].estCoords = {
+        lat: 51.5074 + deterministicOffset(out[i].id, 5, 0.05),
+        lng: -0.1278 + deterministicOffset(out[i].id, 6, 0.05),
+      };
+      continue;
+    }
 
-    if (prevIndex !== -1 && nextIndex !== -1) {
-      const tPrev = parseTimeMs(out[prevIndex].timestamp);
-      const tNext = parseTimeMs(out[nextIndex].timestamp);
-      const tCur = parseTimeMs(out[i].timestamp);
-      const diff = tNext - tPrev;
-      const ratio = diff > 0 ? (tCur - tPrev) / diff : 0.5;
-      const est = interpolateCoords(
-        out[prevIndex].coords!,
-        out[nextIndex].coords!,
-        ratio
-      );
+    const { prev, next } = findEnclosingRefPoints(out[i].resolvedTime);
+
+    if (prev && next) {
+      const diff = next.time - prev.time;
+      const ratio = diff > 0 ? (out[i].resolvedTime - prev.time) / diff : 0.5;
+      const est = interpolateCoords(prev, next, ratio);
       out[i].estimated = true;
       out[i].estCoords = { lat: est.lat, lng: est.lng };
-    } else if (prevIndex !== -1) {
+    } else if (prev) {
       out[i].estimated = true;
-      const base = out[prevIndex].coords!;
       out[i].estCoords = {
-        lat: base.lat + deterministicOffset(out[i].id, 1),
-        lng: base.lng + deterministicOffset(out[i].id, 2),
+        lat: prev.lat + deterministicOffset(out[i].id, 1),
+        lng: prev.lng + deterministicOffset(out[i].id, 2),
       };
-    } else if (nextIndex !== -1) {
+    } else if (next) {
       out[i].estimated = true;
-      const base = out[nextIndex].coords!;
       out[i].estCoords = {
-        lat: base.lat + deterministicOffset(out[i].id, 3),
-        lng: base.lng + deterministicOffset(out[i].id, 4),
+        lat: next.lat + deterministicOffset(out[i].id, 3),
+        lng: next.lng + deterministicOffset(out[i].id, 4),
       };
     } else {
       out[i].estimated = true;
@@ -186,6 +240,8 @@ interface CameraControllerProps {
     timestamp: number;
   } | null;
   computedImages: EstimatedImageItem[];
+  flyToBoundsTarget?: LatLngBounds | null;
+  onClearFlyTarget?: () => void;
 }
 
 function CameraController({
@@ -193,12 +249,26 @@ function CameraController({
   coords,
   zoomCategoryTarget,
   computedImages,
+  flyToBoundsTarget,
+  onClearFlyTarget,
 }: CameraControllerProps) {
   const map = useMap();
   const prevTriggerRef = useRef(0);
   const coordsRef = useRef(coords);
   coordsRef.current = coords;
   const prevCategoryTargetRef = useRef<number>(0);
+
+  // Handle explicit fly to bounds target (e.g. from GPX track zoom)
+  useEffect(() => {
+    if (!flyToBoundsTarget) return;
+    map.invalidateSize();
+    map.flyToBounds(flyToBoundsTarget, {
+      padding: [60, 60],
+      maxZoom: 16,
+      duration: 1.0,
+    });
+    if (onClearFlyTarget) onClearFlyTarget();
+  }, [flyToBoundsTarget, map, onClearFlyTarget]);
 
   useEffect(() => {
     // Only fit bounds if trigger was explicitly incremented and changed
@@ -454,6 +524,14 @@ export default function LeafletGeorefMap(props: Props) {
   const [showHelp, setShowHelp] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
 
+  // GPX Track state
+  const [gpxTracks, setGpxTracks] = useState<GpxTrackMetadata[]>([]);
+  const [visibleGpxTracks, setVisibleGpxTracks] = useState<GpxTrackWithPoints[]>([]);
+  const [isDraggingGpx, setIsDraggingGpx] = useState(false);
+  const [activeModalTab, setActiveModalTab] = useState<"basemaps" | "gpx">("basemaps");
+  const [flyToBoundsTarget, setFlyToBoundsTarget] = useState<LatLngBounds | null>(null);
+  const gpxFileInputRef = useRef<HTMLInputElement>(null);
+
   // Sync state if props change from outside
   useEffect(() => {
     setImages(props.images);
@@ -465,7 +543,19 @@ export default function LeafletGeorefMap(props: Props) {
     props.onImagesUpdate?.(newImages);
   };
 
-  const computed = useMemo(() => computeEstimatedPositions(images), [images]);
+  const allVisibleGpxPoints = useMemo(() => {
+    const pts: GpxPoint[] = [];
+    for (const t of visibleGpxTracks) {
+      if (t.points && t.points.length > 0) {
+        pts.push(...t.points);
+      }
+    }
+    return pts;
+  }, [visibleGpxTracks]);
+
+  const computed = useMemo(() => {
+    return computeEstimatedPositions(images, allVisibleGpxPoints);
+  }, [images, allVisibleGpxPoints]);
 
   // Keep selected image in sync with computed list
   useEffect(() => {
@@ -486,17 +576,78 @@ export default function LeafletGeorefMap(props: Props) {
     if (firstWithCoords?.estCoords) {
       return [firstWithCoords.estCoords.lat, firstWithCoords.estCoords.lng];
     }
-    return [51.5074, -0.1278]; // Default London
-  }, [computed, props.center]);
-
-  const georefPositions: LatLngExpression[] = useMemo(() => {
-    const pos: [number, number][] = [];
-    for (let i = 0; i < computed.length; i++) {
-      const c = computed[i].coords;
-      if (c) pos.push([c.lat, c.lng]);
+    if (allVisibleGpxPoints.length > 0) {
+      return [allVisibleGpxPoints[0].lat, allVisibleGpxPoints[0].lng];
     }
-    return pos;
-  }, [computed]);
+    return [51.5074, -0.1278]; // Default London
+  }, [computed, allVisibleGpxPoints, props.center]);
+
+  // Dotted route segments connecting verified photos and all visible GPX trackpoints
+  const georefSegments: [number, number][][] = useMemo(() => {
+    interface RefPt {
+      lat: number;
+      lng: number;
+      time: number;
+    }
+    const points: RefPt[] = [];
+
+    let tz: string | null = null;
+    if (allVisibleGpxPoints.length > 0) {
+      tz = getTimezoneForCoords(allVisibleGpxPoints[0].lat, allVisibleGpxPoints[0].lng);
+    }
+    if (!tz) {
+      const geo = computed.find(hasValidCoords);
+      if (geo?.coords) {
+        tz = getTimezoneForCoords(geo.coords.lat, geo.coords.lng);
+      }
+    }
+
+    for (const item of computed) {
+      if (hasValidCoords(item)) {
+        points.push({
+          lat: item.coords!.lat,
+          lng: item.coords!.lng,
+          time: resolvePhotoTimeMs(item, tz),
+        });
+      }
+    }
+
+    for (const pt of allVisibleGpxPoints) {
+      points.push({
+        lat: pt.lat,
+        lng: pt.lng,
+        time: pt.time,
+      });
+    }
+
+    if (points.length < 2) return [];
+
+    points.sort((a, b) => a.time - b.time);
+
+    const segments: [number, number][][] = [];
+    let currentSeg: [number, number][] = [];
+    const MAX_GAP_MS = 6 * 3600 * 1000; // 6 hours
+
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      if (currentSeg.length > 0) {
+        const prev = points[i - 1];
+        if (pt.time - prev.time > MAX_GAP_MS) {
+          if (currentSeg.length >= 2) {
+            segments.push(currentSeg);
+          }
+          currentSeg = [];
+        }
+      }
+      currentSeg.push([pt.lat, pt.lng]);
+    }
+
+    if (currentSeg.length >= 2) {
+      segments.push(currentSeg);
+    }
+
+    return segments;
+  }, [computed, allVisibleGpxPoints]);
 
   // Filter items within selection rectangle
   const selectedItemsInBounds = useMemo(() => {
@@ -630,6 +781,151 @@ export default function LeafletGeorefMap(props: Props) {
       setSelectedBaseMapId(data.selectedId);
       if (typeof window !== "undefined") {
         localStorage.setItem("geopic_active_basemap", data.selectedId);
+      }
+    }
+  };
+
+  // GPX Track loaders and management handlers
+  const loadGpxTracks = React.useCallback(async () => {
+    try {
+      // 1. Fetch visible tracks with points for path interpolation and dotted line
+      const ptsRes = await fetch("/api/gpx?includePoints=true&visibleOnly=true", {
+        headers: getAuthHeaders(),
+      });
+      if (ptsRes.ok) {
+        const data = await ptsRes.json();
+        setVisibleGpxTracks(data.tracks || []);
+      }
+
+      // 2. Fetch full metadata list for layer dialog
+      const metaRes = await fetch("/api/gpx", {
+        headers: getAuthHeaders(),
+      });
+      if (metaRes.ok) {
+        const data = await metaRes.json();
+        setGpxTracks(data.tracks || []);
+      }
+    } catch (err) {
+      console.error("Failed to load GPX tracks:", err);
+    }
+  }, [props.sessionToken]);
+
+  useEffect(() => {
+    loadGpxTracks();
+  }, [loadGpxTracks]);
+
+  const handleUploadGpxFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const token =
+      props.sessionToken ||
+      (typeof window !== "undefined"
+        ? localStorage.getItem("geopic_session_token")
+        : null);
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const res = await fetch("/api/gpx", {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to upload GPX file");
+    }
+
+    await loadGpxTracks();
+  };
+
+  const handleAddGpxUrl = async (url: string, name?: string) => {
+    const res = await fetch("/api/gpx", {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ url, name }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to add GPX URL");
+    }
+
+    await loadGpxTracks();
+  };
+
+  const handleToggleGpxVisibility = async (id: string, isVisible: boolean) => {
+    setGpxTracks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, isVisible } : t))
+    );
+
+    const res = await fetch("/api/gpx", {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ id, isVisible }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to update track visibility");
+    }
+
+    await loadGpxTracks();
+  };
+
+  const handleDeleteGpxTrack = async (id: string) => {
+    const res = await fetch(`/api/gpx?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to delete GPX track");
+    }
+
+    await loadGpxTracks();
+  };
+
+  const handleZoomToGpxTrack = (track: GpxTrackMetadata) => {
+    if (track.bounds) {
+      setShowBaseMapModal(false);
+      const b = L.latLngBounds([
+        [track.bounds.minLat, track.bounds.minLng],
+        [track.bounds.maxLat, track.bounds.maxLng],
+      ]);
+      setFlyToBoundsTarget(b);
+    }
+  };
+
+  const handleMapDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingGpx(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      for (let i = 0; i < e.dataTransfer.files.length; i++) {
+        const file = e.dataTransfer.files[i];
+        if (file.name.toLowerCase().endsWith(".gpx")) {
+          await handleUploadGpxFile(file);
+        }
+      }
+    }
+  };
+
+  const handleQuickFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        await handleUploadGpxFile(file);
+      } catch (err) {
+        console.error("Quick GPX upload failed:", err);
+      } finally {
+        if (gpxFileInputRef.current) {
+          gpxFileInputRef.current.value = "";
+        }
       }
     }
   };
@@ -787,15 +1083,39 @@ export default function LeafletGeorefMap(props: Props) {
         coords.push([c.lat, c.lng]);
       }
     }
+    // Also include sampled points from active GPX tracks
+    for (let i = 0; i < allVisibleGpxPoints.length; i += 10) {
+      coords.push([allVisibleGpxPoints[i].lat, allVisibleGpxPoints[i].lng]);
+    }
     return coords;
-  }, [computed]);
+  }, [computed, allVisibleGpxPoints]);
 
   return (
     <div
       className={`${styles.mapWrapper} ${isRelocating ? styles.relocateActive : ""} ${
         boxSelectMode ? styles.boxSelectActive : ""
       }`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsDraggingGpx(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setIsDraggingGpx(false);
+      }}
+      onDrop={handleMapDrop}
     >
+      {/* GPX Drag & Drop overlay */}
+      {isDraggingGpx && (
+        <div className={styles.dragOverlay}>
+          <div className={styles.dragOverlayContent}>
+            <UploadCloud size={48} className={styles.dragIcon} />
+            <h3>Drop GPX Track here</h3>
+            <p>Will be added to your tracks and used to refine paths and photo locations.</p>
+          </div>
+        </div>
+      )}
+
       {/* Relocation banner */}
       {isRelocating && (
         <div className={styles.relocateBanner}>
@@ -826,10 +1146,30 @@ export default function LeafletGeorefMap(props: Props) {
         >
           <BoxSelect size={18} />
         </button>
+        <input
+          type="file"
+          ref={gpxFileInputRef}
+          accept=".gpx"
+          style={{ display: "none" }}
+          onChange={handleQuickFileInputChange}
+        />
         <button
-          className={`${styles.mapControlBtn} ${showBaseMapModal ? styles.active : ""}`}
+          className={`${styles.mapControlBtn} ${visibleGpxTracks.length > 0 ? styles.active : ""}`}
+          title="GPX Tracks & Upload"
+          onClick={() => {
+            setActiveModalTab("gpx");
+            setShowBaseMapModal(true);
+          }}
+        >
+          <Route size={18} />
+        </button>
+        <button
+          className={`${styles.mapControlBtn} ${showBaseMapModal && activeModalTab === "basemaps" ? styles.active : ""}`}
           title="Base Maps & Layers"
-          onClick={() => setShowBaseMapModal(true)}
+          onClick={() => {
+            setActiveModalTab("basemaps");
+            setShowBaseMapModal(true);
+          }}
         >
           <Layers size={18} />
         </button>
@@ -912,10 +1252,11 @@ export default function LeafletGeorefMap(props: Props) {
           subdomains={activeBaseMap.subdomains ?? "abc"}
         />
 
-        {/* Route connecting verified GPS points */}
-        {georefPositions.length >= 2 && (
+        {/* Route connecting verified GPS points and GPX tracks */}
+        {georefSegments.map((seg, idx) => (
           <Polyline
-            positions={georefPositions}
+            key={`route-seg-${idx}`}
+            positions={seg}
             pathOptions={{
               color: "#4250af",
               weight: 3,
@@ -924,7 +1265,7 @@ export default function LeafletGeorefMap(props: Props) {
             }}
             smoothFactor={1.5}
           />
-        )}
+        ))}
 
         {/* Photo Markers */}
         {computed.map((it) => {
@@ -981,6 +1322,8 @@ export default function LeafletGeorefMap(props: Props) {
           coords={allCoords}
           zoomCategoryTarget={props.zoomCategoryTarget}
           computedImages={computed}
+          flyToBoundsTarget={flyToBoundsTarget}
+          onClearFlyTarget={() => setFlyToBoundsTarget(null)}
         />
       </MapContainer>
 
@@ -1102,7 +1445,7 @@ export default function LeafletGeorefMap(props: Props) {
         </div>
       )}
 
-      {/* Base Map Manager Modal */}
+      {/* Base Map & GPX Layers Manager Modal */}
       <BaseMapModal
         isOpen={showBaseMapModal}
         onClose={() => setShowBaseMapModal(false)}
@@ -1112,6 +1455,13 @@ export default function LeafletGeorefMap(props: Props) {
         onSelectBaseMap={handleSelectBaseMap}
         onAddBaseMap={handleAddBaseMap}
         onDeleteBaseMap={handleDeleteBaseMap}
+        gpxTracks={gpxTracks}
+        onToggleGpxVisibility={handleToggleGpxVisibility}
+        onUploadGpxFile={handleUploadGpxFile}
+        onAddGpxUrl={handleAddGpxUrl}
+        onDeleteGpxTrack={handleDeleteGpxTrack}
+        onZoomToGpxTrack={handleZoomToGpxTrack}
+        initialTab={activeModalTab}
       />
     </div>
   );

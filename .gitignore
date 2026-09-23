@@ -52,3 +52,4 @@ package-lock.json
 /data
 geopic-data
 
+*.gpx
