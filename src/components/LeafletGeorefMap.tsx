@@ -535,6 +535,9 @@ function RelocationInteractivityController({
       const pathEl = (layer as { _path?: SVGElement })._path;
       if (layer instanceof L.CircleMarker) {
         layer.options.interactive = !isRelocating;
+        if (isRelocating && typeof layer.closeTooltip === "function") {
+          layer.closeTooltip();
+        }
         if (pathEl) {
           if (isRelocating) {
             pathEl.classList.remove("leaflet-interactive");
@@ -555,7 +558,6 @@ function RelocationInteractivityController({
 
     const container = map.getContainer();
     if (isRelocating) {
-      map.closeTooltip();
       container.classList.add("leaflet-crosshair");
       const canvas = container.querySelector("canvas");
       if (canvas) {
