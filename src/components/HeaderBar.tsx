@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import styles from "./HeaderBar.module.scss";
 import {
   MapPin,
@@ -54,6 +54,10 @@ export default function HeaderBar({
   onZoomCategory,
 }: HeaderBarProps) {
   const [profileImgError, setProfileImgError] = useState(false);
+
+  useEffect(() => {
+    setProfileImgError(false);
+  }, [user?.id, user?.profileImagePath, sessionToken]);
 
   const presets: { id: TimespanPreset; label: string }[] = [
     { id: "1m", label: "1M" },
@@ -172,7 +176,12 @@ export default function HeaderBar({
         <div className={styles.userCard}>
           {user && !profileImgError ? (
             <img
-              src={`/api/auth/profile-image${sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : ""}`}
+              src={`/api/auth/profile-image?${[
+                user.id ? `userId=${encodeURIComponent(user.id)}` : "",
+                sessionToken ? `token=${encodeURIComponent(sessionToken)}` : "",
+              ]
+                .filter(Boolean)
+                .join("&")}`}
               alt={user.name}
               className={styles.avatar}
               onError={() => setProfileImgError(true)}

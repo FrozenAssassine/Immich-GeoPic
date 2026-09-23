@@ -32,11 +32,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
-      authenticated: true,
-      mode: "login",
-      user: ctx.user,
-    });
+    try {
+      const freshUser = await getCurrentUser(ctx.auth);
+      return NextResponse.json({
+        authenticated: true,
+        mode: "login",
+        user: freshUser,
+      });
+    } catch {
+      return NextResponse.json({
+        authenticated: true,
+        mode: "login",
+        user: ctx.user,
+      });
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Auth check failed";
     console.error("Auth check error:", message);

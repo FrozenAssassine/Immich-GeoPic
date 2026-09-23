@@ -9,7 +9,10 @@ export async function GET(req: NextRequest) {
       return new NextResponse(null, { status: 401 });
     }
 
-    const streamResult = await getProfileImageStream(ctx.auth);
+    const queryUserId = req.nextUrl.searchParams.get("userId") || undefined;
+    const userId = queryUserId || ctx.user?.id;
+
+    const streamResult = await getProfileImageStream(ctx.auth, userId);
     if (!streamResult || !streamResult.body) {
       return new NextResponse(null, { status: 404 });
     }

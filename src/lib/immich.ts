@@ -146,23 +146,62 @@ export async function getCurrentUser(auth: ImmichAuth): Promise<ImmichUser> {
   };
 }
 
-export async function getProfileImageStream(auth: ImmichAuth): Promise<{
+export async function getProfileImageStream(
+  auth: ImmichAuth,
+  userId?: string
+): Promise<{
   body: ReadableStream<Uint8Array> | null;
   contentType: string;
 } | null> {
   const baseUrl = getImmichUrl();
-  const res = await fetch(`${baseUrl}/api/users/me/profile-image`, {
-    headers: getAuthHeaders(auth),
-  });
 
-  if (!res.ok || !res.body) {
-    return null;
+  let targetUserId = userId;
+  if (!targetUserId || targetUserId === "apikey-user") {
+    try {
+      const user = await getCurrentUser(auth);
+      if (!user?.id) {
+        return null;
+      }
+      targetUserId = user.id;
+    } catch (err) {
+      console.warn("[getProfileImageStream] Failed to resolve current user:", err);
+      return null;
+    }
   }
 
-  return {
-    body: res.body,
-    contentType: res.headers.get("content-type") || "image/jpeg",
-  };
+  try {
+    const res = await fetch(`${baseUrl}/api/users/${targetUserId}/profile-image`, {
+      headers: getAuthHeaders(auth),
+    });
+
+    if (res.ok && res.body) {
+      return {
+        body: res.body,
+        contentType: res.headers.get("content-type") || "image/jpeg",
+      };
+    }
+  } catch (err) {
+    console.error(`[getProfileImageStream] Error fetching profile image for ${targetUserId}:`, err);
+  }
+
+  // Fallback in case a specific Immich deployment uses /api/users/me/profile-image
+  if (targetUserId !== "me") {
+    try {
+      const fallbackRes = await fetch(`${baseUrl}/api/users/me/profile-image`, {
+        headers: getAuthHeaders(auth),
+      });
+      if (fallbackRes.ok && fallbackRes.body) {
+        return {
+          body: fallbackRes.body,
+          contentType: fallbackRes.headers.get("content-type") || "image/jpeg",
+        };
+      }
+    } catch {
+      // Ignore fallback error
+    }
+  }
+
+  return null;
 }
 
 export async function searchAssets(
