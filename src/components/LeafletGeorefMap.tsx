@@ -51,16 +51,12 @@ type Props = {
   } | null;
 };
 
-type EstimatedImageItem = ImageItem & {
+export type MapDisplayItem = ImageItem & {
   estimated?: boolean;
   estCoords?: { lat: number; lng: number };
   resolvedTime?: number;
+  isGpx?: boolean;
 };
-
-function parseTimeMs(timestamp: string): number {
-  const t = Date.parse(timestamp);
-  return Number.isNaN(t) ? 0 : t;
-}
 
 function interpolate(a: number, b: number, ratio: number): number {
   return a + (b - a) * ratio;
@@ -77,7 +73,7 @@ function interpolateCoords(
   };
 }
 
-function hasValidCoords(img: ImageItem): boolean {
+function hasValidCoords(img: { coords?: { lat?: number; lng?: number } }): boolean {
   return (
     !!img.coords &&
     typeof img.coords.lat === "number" &&
@@ -96,140 +92,140 @@ function deterministicOffset(id: string, salt: number, scale = 0.001): number {
   return normalized * scale;
 }
 
+/**
+ * Computes positions for all photos and GPX track points in a single unified sequence.
+ * Per user instructions:
+ * - A track point is handled directly like a marker position.
+ * - Unlocated photos are automatically estimated between the surrounding reference points
+ *   (which can be geotagged photos or GPX track points) using the standard forward/backward scan.
+ * - No custom binary search logic.
+ */
 function computeEstimatedPositions(
-  items: ImageItem[],
-  gpxPoints: GpxPoint[] = []
-): EstimatedImageItem[] {
-  if (!Array.isArray(items) || items.length === 0) return [];
+  images: ImageItem[],
+  visibleGpxTracks: GpxTrackWithPoints[] = []
+): MapDisplayItem[] {
+  if (!Array.isArray(images)) images = [];
 
-  // Determine timezone from GPX points if present, or from geotagged photos
-  let inferredTz: string | null = null;
-  if (gpxPoints.length > 0) {
-    inferredTz = getTimezoneForCoords(gpxPoints[0].lat, gpxPoints[0].lng);
-  }
-  if (!inferredTz) {
-    const geoItem = items.find(hasValidCoords);
-    if (geoItem?.coords) {
-      inferredTz = getTimezoneForCoords(geoItem.coords.lat, geoItem.coords.lng);
-    }
-  }
-
-  // Create clean shallow clones with resolved UTC times
-  const out: (EstimatedImageItem & { resolvedTime: number })[] = items
-    .map((item) => {
-      const { estimated, estCoords, ...cleanItem } = item as EstimatedImageItem;
-      const resolvedTime = resolvePhotoTimeMs(cleanItem, inferredTz);
-      return {
-        ...cleanItem,
-        resolvedTime,
-        estimated: false,
-        estCoords: undefined,
-      };
-    })
-    .sort((a, b) => a.resolvedTime - b.resolvedTime);
-
-  // Combine verified photos and GPX points into a unified sorted reference list
-  interface RefPoint {
-    lat: number;
-    lng: number;
-    time: number;
-  }
-
-  const refPoints: RefPoint[] = [];
-
-  for (const item of out) {
-    if (hasValidCoords(item)) {
-      refPoints.push({
-        lat: item.coords!.lat,
-        lng: item.coords!.lng,
-        time: item.resolvedTime,
+  // 1. Convert all visible GPX points into sequence items
+  const gpxItems: MapDisplayItem[] = [];
+  for (const track of visibleGpxTracks) {
+    if (!track.points) continue;
+    for (let i = 0; i < track.points.length; i++) {
+      const pt = track.points[i];
+      gpxItems.push({
+        id: `gpx_${track.id}_${i}`,
+        name: track.name || "GPX Track Point",
+        timestamp: new Date(pt.time).toISOString(),
+        coords: { lat: pt.lat, lng: pt.lng },
+        resolvedTime: pt.time,
+        isGpx: true,
       });
     }
   }
 
-  for (const pt of gpxPoints) {
-    refPoints.push({
-      lat: pt.lat,
-      lng: pt.lng,
-      time: pt.time,
-    });
+  if (images.length === 0 && gpxItems.length === 0) return [];
+
+  // 2. Determine fallback timezone for unlocated photos
+  // Inferred from GPX points or geotagged photos
+  let fallbackTz: string | null = null;
+  if (gpxItems.length > 0 && gpxItems[0].coords) {
+    fallbackTz = getTimezoneForCoords(gpxItems[0].coords.lat, gpxItems[0].coords.lng);
+  }
+  if (!fallbackTz) {
+    const geo = images.find(hasValidCoords);
+    if (geo?.coords) {
+      fallbackTz = getTimezoneForCoords(geo.coords.lat, geo.coords.lng);
+    }
   }
 
-  refPoints.sort((a, b) => a.time - b.time);
-
-  // Binary search helper to find enclosing reference points for a given timestamp
-  const findEnclosingRefPoints = (time: number) => {
-    let low = 0;
-    let high = refPoints.length - 1;
-    let prevIdx = -1;
-    let nextIdx = -1;
-
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      if (refPoints[mid].time === time) {
-        return { prev: refPoints[mid], next: refPoints[mid] };
-      } else if (refPoints[mid].time < time) {
-        prevIdx = mid;
-        low = mid + 1;
-      } else {
-        nextIdx = mid;
-        high = mid - 1;
-      }
-    }
-
+  // 3. Prepare photo items with resolved times
+  const photoItems: MapDisplayItem[] = images.map((img) => {
+    const { estimated, estCoords, ...clean } = img as MapDisplayItem;
+    const resolvedTime = resolvePhotoTimeMs(clean, fallbackTz);
     return {
-      prev: prevIdx !== -1 ? refPoints[prevIdx] : undefined,
-      next: nextIdx !== -1 ? refPoints[nextIdx] : undefined,
+      ...clean,
+      resolvedTime,
+      estimated: false,
+      estCoords: undefined,
+      isGpx: false,
     };
-  };
+  });
 
-  // Estimate unlocated photos
-  for (let i = 0; i < out.length; i++) {
-    if (hasValidCoords(out[i])) {
-      out[i].estimated = false;
-      out[i].estCoords = undefined;
+  // 4. Merge all items and sort chronologically
+  const allItems: MapDisplayItem[] = [...photoItems, ...gpxItems].sort(
+    (a, b) => (a.resolvedTime || 0) - (b.resolvedTime || 0)
+  );
+
+  const n = allItems.length;
+
+  // Pass 1: Forward scan - find previous item with valid coordinates
+  const prevGeoIndex = new Int32Array(n);
+  let lastGeo = -1;
+  for (let i = 0; i < n; i++) {
+    prevGeoIndex[i] = lastGeo;
+    if (hasValidCoords(allItems[i])) {
+      lastGeo = i;
+    }
+  }
+
+  // Pass 2: Backward scan - find next item with valid coordinates
+  const nextGeoIndex = new Int32Array(n);
+  lastGeo = -1;
+  for (let i = n - 1; i >= 0; i--) {
+    nextGeoIndex[i] = lastGeo;
+    if (hasValidCoords(allItems[i])) {
+      lastGeo = i;
+    }
+  }
+
+  // Pass 3: Estimate unlocated photos in O(1) per photo
+  for (let i = 0; i < n; i++) {
+    if (hasValidCoords(allItems[i])) {
+      allItems[i].estimated = false;
+      allItems[i].estCoords = undefined;
       continue;
     }
 
-    if (refPoints.length === 0) {
-      out[i].estimated = true;
-      out[i].estCoords = {
-        lat: 51.5074 + deterministicOffset(out[i].id, 5, 0.05),
-        lng: -0.1278 + deterministicOffset(out[i].id, 6, 0.05),
-      };
-      continue;
-    }
+    const prevIndex = prevGeoIndex[i];
+    const nextIndex = nextGeoIndex[i];
 
-    const { prev, next } = findEnclosingRefPoints(out[i].resolvedTime);
-
-    if (prev && next) {
-      const diff = next.time - prev.time;
-      const ratio = diff > 0 ? (out[i].resolvedTime - prev.time) / diff : 0.5;
-      const est = interpolateCoords(prev, next, ratio);
-      out[i].estimated = true;
-      out[i].estCoords = { lat: est.lat, lng: est.lng };
-    } else if (prev) {
-      out[i].estimated = true;
-      out[i].estCoords = {
-        lat: prev.lat + deterministicOffset(out[i].id, 1),
-        lng: prev.lng + deterministicOffset(out[i].id, 2),
+    if (prevIndex !== -1 && nextIndex !== -1) {
+      const tPrev = allItems[prevIndex].resolvedTime || 0;
+      const tNext = allItems[nextIndex].resolvedTime || 0;
+      const tCur = allItems[i].resolvedTime || 0;
+      const diff = tNext - tPrev;
+      const ratio = diff > 0 ? (tCur - tPrev) / diff : 0.5;
+      const est = interpolateCoords(
+        allItems[prevIndex].coords!,
+        allItems[nextIndex].coords!,
+        ratio
+      );
+      allItems[i].estimated = true;
+      allItems[i].estCoords = { lat: est.lat, lng: est.lng };
+    } else if (prevIndex !== -1) {
+      allItems[i].estimated = true;
+      const base = allItems[prevIndex].coords!;
+      allItems[i].estCoords = {
+        lat: base.lat + deterministicOffset(allItems[i].id, 1),
+        lng: base.lng + deterministicOffset(allItems[i].id, 2),
       };
-    } else if (next) {
-      out[i].estimated = true;
-      out[i].estCoords = {
-        lat: next.lat + deterministicOffset(out[i].id, 3),
-        lng: next.lng + deterministicOffset(out[i].id, 4),
+    } else if (nextIndex !== -1) {
+      allItems[i].estimated = true;
+      const base = allItems[nextIndex].coords!;
+      allItems[i].estCoords = {
+        lat: base.lat + deterministicOffset(allItems[i].id, 3),
+        lng: base.lng + deterministicOffset(allItems[i].id, 4),
       };
     } else {
-      out[i].estimated = true;
-      out[i].estCoords = {
-        lat: 51.5074 + deterministicOffset(out[i].id, 5, 0.05),
-        lng: -0.1278 + deterministicOffset(out[i].id, 6, 0.05),
+      allItems[i].estimated = true;
+      allItems[i].estCoords = {
+        lat: 51.5074 + deterministicOffset(allItems[i].id, 5, 0.05),
+        lng: -0.1278 + deterministicOffset(allItems[i].id, 6, 0.05),
       };
     }
   }
 
-  return out;
+  return allItems;
 }
 
 interface CameraControllerProps {
@@ -239,7 +235,7 @@ interface CameraControllerProps {
     category: "all" | "geotagged" | "unreferenced";
     timestamp: number;
   } | null;
-  computedImages: EstimatedImageItem[];
+  computedImages: MapDisplayItem[];
   flyToBoundsTarget?: LatLngBounds | null;
   onClearFlyTarget?: () => void;
 }
@@ -298,16 +294,17 @@ function CameraController({
 
     const { category } = zoomCategoryTarget;
     const targetCoords: [number, number][] = [];
+    const photos = computedImages.filter((img) => !img.isGpx);
 
     if (category === "all") {
-      for (const img of computedImages) {
+      for (const img of photos) {
         const c = img.coords || img.estCoords;
         if (c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng)) {
           targetCoords.push([c.lat, c.lng]);
         }
       }
     } else if (category === "geotagged") {
-      for (const img of computedImages) {
+      for (const img of photos) {
         if (
           img.coords &&
           !Number.isNaN(img.coords.lat) &&
@@ -317,7 +314,7 @@ function CameraController({
         }
       }
     } else if (category === "unreferenced") {
-      for (const img of computedImages) {
+      for (const img of photos) {
         if (
           !img.coords &&
           img.estCoords &&
@@ -517,7 +514,7 @@ function RectangleDrawer({
 
 export default function LeafletGeorefMap(props: Props) {
   const [images, setImages] = useState<ImageItem[]>(props.images);
-  const [selectedImage, setSelectedImage] = useState<EstimatedImageItem | null>(null);
+  const [selectedImage, setSelectedImage] = useState<MapDisplayItem | null>(null);
   const [isRelocating, setIsRelocating] = useState(false);
   const [boxSelectMode, setBoxSelectMode] = useState(false);
   const [bounds, setBounds] = useState<LatLngBounds | null>(null);
@@ -528,6 +525,8 @@ export default function LeafletGeorefMap(props: Props) {
   const [gpxTracks, setGpxTracks] = useState<GpxTrackMetadata[]>([]);
   const [visibleGpxTracks, setVisibleGpxTracks] = useState<GpxTrackWithPoints[]>([]);
   const [isDraggingGpx, setIsDraggingGpx] = useState(false);
+  const dragCounterRef = useRef(0);
+  const [showBaseMapModal, setShowBaseMapModal] = useState(false);
   const [activeModalTab, setActiveModalTab] = useState<"basemaps" | "gpx">("basemaps");
   const [flyToBoundsTarget, setFlyToBoundsTarget] = useState<LatLngBounds | null>(null);
   const gpxFileInputRef = useRef<HTMLInputElement>(null);
@@ -543,29 +542,25 @@ export default function LeafletGeorefMap(props: Props) {
     props.onImagesUpdate?.(newImages);
   };
 
-  const allVisibleGpxPoints = useMemo(() => {
-    const pts: GpxPoint[] = [];
-    for (const t of visibleGpxTracks) {
-      if (t.points && t.points.length > 0) {
-        pts.push(...t.points);
-      }
-    }
-    return pts;
-  }, [visibleGpxTracks]);
-
+  // Compute unified positions: photos and GPX trackpoints are sequenced together
   const computed = useMemo(() => {
-    return computeEstimatedPositions(images, allVisibleGpxPoints);
-  }, [images, allVisibleGpxPoints]);
+    return computeEstimatedPositions(images, visibleGpxTracks);
+  }, [images, visibleGpxTracks]);
 
-  // Keep selected image in sync with computed list
+  // Photo-only items for markers, inspector, and selection
+  const photoItems = useMemo(() => {
+    return computed.filter((it) => !it.isGpx);
+  }, [computed]);
+
+  // Keep selected image in sync with computed photo list
   useEffect(() => {
     if (selectedImage) {
-      const refreshed = computed.find((img) => img.id === selectedImage.id);
+      const refreshed = photoItems.find((img) => img.id === selectedImage.id);
       if (refreshed) {
         setSelectedImage(refreshed);
       }
     }
-  }, [computed]);
+  }, [photoItems]);
 
   const initialCenter: LatLngExpression = useMemo(() => {
     if (props.center) return props.center;
@@ -576,94 +571,75 @@ export default function LeafletGeorefMap(props: Props) {
     if (firstWithCoords?.estCoords) {
       return [firstWithCoords.estCoords.lat, firstWithCoords.estCoords.lng];
     }
-    if (allVisibleGpxPoints.length > 0) {
-      return [allVisibleGpxPoints[0].lat, allVisibleGpxPoints[0].lng];
-    }
     return [51.5074, -0.1278]; // Default London
-  }, [computed, allVisibleGpxPoints, props.center]);
+  }, [computed, props.center]);
 
-  // Dotted route segments connecting verified photos and all visible GPX trackpoints
-  const georefSegments: [number, number][][] = useMemo(() => {
-    interface RefPt {
-      lat: number;
-      lng: number;
-      time: number;
-    }
-    const points: RefPt[] = [];
-
-    let tz: string | null = null;
-    if (allVisibleGpxPoints.length > 0) {
-      tz = getTimezoneForCoords(allVisibleGpxPoints[0].lat, allVisibleGpxPoints[0].lng);
-    }
-    if (!tz) {
-      const geo = computed.find(hasValidCoords);
-      if (geo?.coords) {
-        tz = getTimezoneForCoords(geo.coords.lat, geo.coords.lng);
+  // One single continuous polyline connecting ALL photo markers and all GPX trackpoints
+  const continuousPolylinePositions: LatLngExpression[] = useMemo(() => {
+    const pos: [number, number][] = [];
+    for (let i = 0; i < computed.length; i++) {
+      const c = computed[i].coords || computed[i].estCoords;
+      if (
+        c &&
+        typeof c.lat === "number" &&
+        typeof c.lng === "number" &&
+        !Number.isNaN(c.lat) &&
+        !Number.isNaN(c.lng)
+      ) {
+        pos.push([c.lat, c.lng]);
       }
     }
+    return pos;
+  }, [computed]);
 
-    for (const item of computed) {
-      if (hasValidCoords(item)) {
-        points.push({
-          lat: item.coords!.lat,
-          lng: item.coords!.lng,
-          time: resolvePhotoTimeMs(item, tz),
-        });
-      }
-    }
-
-    for (const pt of allVisibleGpxPoints) {
-      points.push({
-        lat: pt.lat,
-        lng: pt.lng,
-        time: pt.time,
-      });
-    }
-
-    if (points.length < 2) return [];
-
-    points.sort((a, b) => a.time - b.time);
-
-    const segments: [number, number][][] = [];
-    let currentSeg: [number, number][] = [];
-    const MAX_GAP_MS = 6 * 3600 * 1000; // 6 hours
-
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      if (currentSeg.length > 0) {
-        const prev = points[i - 1];
-        if (pt.time - prev.time > MAX_GAP_MS) {
-          if (currentSeg.length >= 2) {
-            segments.push(currentSeg);
-          }
-          currentSeg = [];
-        }
-      }
-      currentSeg.push([pt.lat, pt.lng]);
-    }
-
-    if (currentSeg.length >= 2) {
-      segments.push(currentSeg);
-    }
-
-    return segments;
-  }, [computed, allVisibleGpxPoints]);
-
-  // Filter items within selection rectangle
+  // Filter items within selection rectangle (photos only)
   const selectedItemsInBounds = useMemo(() => {
     if (!bounds) return [];
-    return computed.filter((i) => {
+    return photoItems.filter((i) => {
       const c = i.coords || i.estCoords;
       if (!c || Number.isNaN(c.lat) || Number.isNaN(c.lng)) return false;
       return bounds.contains([c.lat, c.lng]);
     });
-  }, [bounds, computed]);
+  }, [bounds, photoItems]);
 
   const estimatedInBounds = useMemo(() => {
     return selectedItemsInBounds.filter(
       (i) => !hasValidCoords(i) && i.estimated && i.estCoords
     );
   }, [selectedItemsInBounds]);
+
+  // Clear map drag overlay if modal opens
+  useEffect(() => {
+    if (showBaseMapModal) {
+      setIsDraggingGpx(false);
+      dragCounterRef.current = 0;
+    }
+  }, [showBaseMapModal]);
+
+  // Window-level safety listeners to ensure drag overlay never gets stuck
+  useEffect(() => {
+    const handleDragEnd = () => {
+      dragCounterRef.current = 0;
+      setIsDraggingGpx(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        dragCounterRef.current = 0;
+        setIsDraggingGpx(false);
+      }
+    };
+
+    window.addEventListener("dragend", handleDragEnd);
+    window.addEventListener("drop", handleDragEnd);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("dragend", handleDragEnd);
+      window.removeEventListener("drop", handleDragEnd);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   const getAuthHeaders = () => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -686,7 +662,6 @@ export default function LeafletGeorefMap(props: Props) {
     return DEFAULT_BASEMAP.id;
   });
   const [presets, setPresets] = useState<BaseMapPreset[]>(BASEMAP_PRESETS);
-  const [showBaseMapModal, setShowBaseMapModal] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -903,7 +878,10 @@ export default function LeafletGeorefMap(props: Props) {
   const handleMapDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    dragCounterRef.current = 0;
     setIsDraggingGpx(false);
+
+    if (showBaseMapModal) return;
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       for (let i = 0; i < e.dataTransfer.files.length; i++) {
@@ -950,7 +928,7 @@ export default function LeafletGeorefMap(props: Props) {
 
       const updated = images.map((img) => {
         if (img.id === selectedImage.id) {
-          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          const { estimated, estCoords, ...clean } = img as MapDisplayItem;
           return { ...clean, coords: { lat, lng } };
         }
         return img;
@@ -981,7 +959,7 @@ export default function LeafletGeorefMap(props: Props) {
 
       const updated = images.map((img) => {
         if (img.id === selectedImage.id) {
-          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          const { estimated, estCoords, ...clean } = img as MapDisplayItem;
           return { ...clean, coords };
         }
         return img;
@@ -1011,7 +989,7 @@ export default function LeafletGeorefMap(props: Props) {
 
       const updated = images.map((img) => {
         if (img.id === selectedImage.id) {
-          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          const { estimated, estCoords, ...clean } = img as MapDisplayItem;
           return { ...clean, coords: undefined };
         }
         return img;
@@ -1048,7 +1026,7 @@ export default function LeafletGeorefMap(props: Props) {
       const updated = images.map((img) => {
         const newCoords = updatedMap.get(img.id);
         if (newCoords) {
-          const { estimated, estCoords, ...clean } = img as EstimatedImageItem;
+          const { estimated, estCoords, ...clean } = img as MapDisplayItem;
           return { ...clean, coords: newCoords };
         }
         return img;
@@ -1078,40 +1056,60 @@ export default function LeafletGeorefMap(props: Props) {
   const allCoords = useMemo(() => {
     const coords: [number, number][] = [];
     for (let i = 0; i < computed.length; i++) {
-      const c = computed[i].coords || computed[i].estCoords;
-      if (c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng)) {
-        coords.push([c.lat, c.lng]);
+      if (!computed[i].isGpx || i % 10 === 0) {
+        const c = computed[i].coords || computed[i].estCoords;
+        if (c && !Number.isNaN(c.lat) && !Number.isNaN(c.lng)) {
+          coords.push([c.lat, c.lng]);
+        }
       }
     }
-    // Also include sampled points from active GPX tracks
-    for (let i = 0; i < allVisibleGpxPoints.length; i += 10) {
-      coords.push([allVisibleGpxPoints[i].lat, allVisibleGpxPoints[i].lng]);
-    }
     return coords;
-  }, [computed, allVisibleGpxPoints]);
+  }, [computed]);
 
   return (
     <div
       className={`${styles.mapWrapper} ${isRelocating ? styles.relocateActive : ""} ${
         boxSelectMode ? styles.boxSelectActive : ""
       }`}
-      onDragOver={(e) => {
+      onDragEnter={(e) => {
         e.preventDefault();
+        if (showBaseMapModal) return;
+        dragCounterRef.current++;
         setIsDraggingGpx(true);
       }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (showBaseMapModal) return;
+        if (!isDraggingGpx) {
+          setIsDraggingGpx(true);
+        }
+      }}
       onDragLeave={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-        setIsDraggingGpx(false);
+        e.preventDefault();
+        dragCounterRef.current--;
+        if (dragCounterRef.current <= 0) {
+          dragCounterRef.current = 0;
+          setIsDraggingGpx(false);
+        }
       }}
       onDrop={handleMapDrop}
     >
       {/* GPX Drag & Drop overlay */}
       {isDraggingGpx && (
-        <div className={styles.dragOverlay}>
+        <div
+          className={styles.dragOverlay}
+          onClick={() => {
+            dragCounterRef.current = 0;
+            setIsDraggingGpx(false);
+          }}
+        >
           <div className={styles.dragOverlayContent}>
             <UploadCloud size={48} className={styles.dragIcon} />
             <h3>Drop GPX Track here</h3>
             <p>Will be added to your tracks and used to refine paths and photo locations.</p>
+            <span style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+              Click anywhere or press Esc to dismiss
+            </span>
           </div>
         </div>
       )}
@@ -1252,11 +1250,10 @@ export default function LeafletGeorefMap(props: Props) {
           subdomains={activeBaseMap.subdomains ?? "abc"}
         />
 
-        {/* Route connecting verified GPS points and GPX tracks */}
-        {georefSegments.map((seg, idx) => (
+        {/* Route connecting all photo markers and GPX tracks with one continuous polyline */}
+        {continuousPolylinePositions.length >= 2 && (
           <Polyline
-            key={`route-seg-${idx}`}
-            positions={seg}
+            positions={continuousPolylinePositions}
             pathOptions={{
               color: "#4250af",
               weight: 3,
@@ -1265,10 +1262,10 @@ export default function LeafletGeorefMap(props: Props) {
             }}
             smoothFactor={1.5}
           />
-        ))}
+        )}
 
-        {/* Photo Markers */}
-        {computed.map((it) => {
+        {/* Photo Markers - rendered only for actual photos, never for GPX track points */}
+        {photoItems.map((it) => {
           const isVerified = !!it.coords;
           const lat = isVerified ? it.coords!.lat : it.estCoords?.lat;
           const lng = isVerified ? it.coords!.lng : it.estCoords?.lng;
@@ -1300,7 +1297,7 @@ export default function LeafletGeorefMap(props: Props) {
                 },
               }}
             >
-              {(computed.length <= 1500 || isSelected) && (
+              {(photoItems.length <= 1500 || isSelected) && (
                 <Tooltip direction="top" offset={[0, -6]}>
                   <span>{it.name}</span>
                 </Tooltip>

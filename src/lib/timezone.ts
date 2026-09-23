@@ -78,6 +78,12 @@ export function parseLocalDateInTzToUtcMs(localDateTimeStr: string, timeZone: st
     return Date.UTC(p.year, (p.month || 1) - 1, p.day || 1, hr, p.minute || 0, p.second || 0, millisecond);
   };
 
+  // Handle offset strings directly like "+02:00" or "-05:00"
+  if (timeZone.startsWith("+") || timeZone.startsWith("-")) {
+    const rawDigits = localDateTimeStr.replace(/[Zz]$/, "").replace(/[+-]\d{2}:?\d{2}$/, "");
+    return parseGpxTime(`${rawDigits}${timeZone}`);
+  }
+
   const local1 = getTzInstant(guessUtc);
   const offset1 = local1 - guessUtc;
   const candidateUtc = guessUtc - offset1;
@@ -97,33 +103,48 @@ export interface PhotoTimeParams {
 
 /**
  * Resolves the true UTC epoch milliseconds for a photo.
+ * Requirements:
+ * - "Assume the photos with existing gps data have a timestamp with the local time in the country
+ *    they were taken if not otherwise specified in the metadata (newer exif data sometimes contains timezone information)."
+ *
  * Logic:
- * 1. If explicit timezone is provided in metadata (timeZone): use it to convert local time to UTC.
- * 2. If timestamp string contains an explicit offset (e.g. +02:00 or -05:00): parse directly.
+ * 1. If timestamp string has an explicit offset (e.g. +02:00, -05:00):
+ *    Parse directly with parseGpxTime.
+ * 2. If explicit timezone metadata is provided (timeZone) e.g. from newer EXIF or Immich:
+ *    - If timestamp already has trailing 'Z' (converted to UTC by Immich), parse as UTC directly to avoid double shifting.
+ *    - Otherwise, convert local wall-clock time using the explicit timezone.
  * 3. If photo has GPS coords (lat, lng) and no timezone metadata:
- *    Lookup the timezone of the country/location, and assume timestamp represents local wall-clock time.
- * 4. If photo has no GPS coords (unreferenced):
- *    Use fallbackTimezone (from active GPX tracks or nearby geotagged photos) if available.
+ *    Lookup the timezone of the country/location, and convert the local wall-clock time to UTC.
+ * 4. If photo is unreferenced (no GPS coords) and no timezone metadata:
+ *    Use fallbackTimezone (from active GPX tracks or geotagged photos on the trip) to convert local wall-clock time to UTC.
+ * 5. Default fallback to standard Date.parse.
  */
 export function resolvePhotoTimeMs(photo: PhotoTimeParams, fallbackTimezone?: string | null): number {
   if (!photo.timestamp) return 0;
+  const trimmed = photo.timestamp.trim();
   const raw = photo.localDateTime || photo.timestamp;
 
-  // 1. Explicit timezone metadata in EXIF
+  // 1. Explicit offset directly in timestamp string (e.g. +02:00, -05:00)
+  if (/[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    return parseGpxTime(trimmed);
+  }
+
+  // 2. Explicit timezone specified in metadata (newer EXIF)
   if (photo.timeZone && photo.timeZone.trim()) {
     const tz = photo.timeZone.trim();
-    if (tz.startsWith("+") || tz.startsWith("-")) {
-      return parseGpxTime(`${raw.replace(/[Zz]$/, "")}${tz}`);
+    // If timestamp was already serialized in UTC ISO (ends with Z or z),
+    // Immich has already converted it using the EXIF timezone offset.
+    // Do NOT double shift!
+    if (trimmed.endsWith("Z") || trimmed.endsWith("z")) {
+      const t = Date.parse(trimmed);
+      if (!Number.isNaN(t)) return t;
     }
+    // If timestamp does not end with Z, convert local wall-clock time using the explicit timezone
     return parseLocalDateInTzToUtcMs(raw, tz);
   }
 
-  // 2. Explicit offset in timestamp string itself (e.g. +02:00, -04:00, or Z when not stripped)
-  if (/[+-]\d{2}:?\d{2}$/.test(photo.timestamp.trim())) {
-    return parseGpxTime(photo.timestamp);
-  }
-
-  // 3. Photo has GPS coordinates: lookup country timezone and interpret as local time
+  // 3. Photo has GPS coordinates, but no timezone in metadata:
+  // "Assume the photos with existing gps data have a timestamp with the local time in the country they were taken"
   if (photo.coords && typeof photo.coords.lat === "number" && typeof photo.coords.lng === "number") {
     const tz = getTimezoneForCoords(photo.coords.lat, photo.coords.lng);
     if (tz) {
@@ -131,12 +152,13 @@ export function resolvePhotoTimeMs(photo: PhotoTimeParams, fallbackTimezone?: st
     }
   }
 
-  // 4. Unreferenced photo: use fallback timezone if known
+  // 4. Unreferenced photo without GPS or timezone metadata:
+  // Use fallback timezone if known from active GPX tracks or other trip photos
   if (fallbackTimezone) {
     return parseLocalDateInTzToUtcMs(raw, fallbackTimezone);
   }
 
   // Fallback to standard parse
-  const parsed = Date.parse(photo.timestamp);
+  const parsed = Date.parse(trimmed);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
