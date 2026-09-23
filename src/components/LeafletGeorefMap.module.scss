@@ -12,9 +12,46 @@
 
 .relocateActive,
 .relocateActive :global(.leaflet-container),
+.relocateActive :global(.leaflet-container *),
+.relocateActive :global(.leaflet-pane),
+.relocateActive :global(.leaflet-interactive),
+.relocateActive :global(.leaflet-grab),
 .boxSelectActive,
-.boxSelectActive :global(.leaflet-container) {
+.boxSelectActive :global(.leaflet-container),
+.boxSelectActive :global(.leaflet-container *),
+.boxSelectActive :global(.leaflet-pane),
+.boxSelectActive :global(.leaflet-interactive) {
   cursor: crosshair !important;
+}
+
+/* Allow controls, cards, and banners to maintain their normal cursor and interactivity */
+.relocateActive :global(.leaflet-control-container),
+.relocateActive :global(.leaflet-control-container *),
+.relocateBanner,
+.relocateBanner *,
+.inspectorCard,
+.inspectorCard * {
+  cursor: auto;
+}
+
+.relocateBanner .cancelBtn,
+.inspectorCard button,
+.inspectorCard button * {
+  cursor: pointer !important;
+}
+
+.mapWrapper :global(.leaflet-control-zoom) a {
+  cursor: pointer !important;
+}
+
+/* In relocate mode, disable pointer-events on markers and overlay svgs so they are click-through */
+.relocateActive {
+  :global(.leaflet-marker-pane),
+  :global(.leaflet-tooltip-pane),
+  :global(.leaflet-popup-pane),
+  :global(.leaflet-overlay-pane) svg {
+    pointer-events: none !important;
+  }
 }
 
 /* Relocation notice banner */
@@ -116,12 +153,45 @@
   justify-content: center;
   position: relative;
   overflow: hidden;
+  cursor: pointer;
+
+  &:hover .expandHint {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  &:hover .previewImage {
+    transform: scale(1.03);
+  }
 }
 
 .previewImage {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  transition: transform 0.2s ease;
+}
+
+.expandHint {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #ffffff;
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: all 0.2s ease;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  box-shadow: var(--shadow-sm);
+  z-index: 2;
 }
 
 .badgeOverlay {
@@ -454,6 +524,111 @@
   }
   to {
     transform: translateY(-8px);
+  }
+}
+
+/* Large Image Lightbox Modal */
+.lightboxOverlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 24px;
+  animation: fadeIn 0.2s ease-out;
+  cursor: zoom-out;
+}
+
+.lightboxContent {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  cursor: default;
+}
+
+.lightboxHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #ffffff;
+  padding: 0 4px;
+}
+
+.lightboxTitle {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.lightboxName {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.lightboxDate {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 400;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.lightboxCloseBtn {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #ffffff;
+  border-radius: var(--radius-full);
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+  }
+}
+
+.lightboxImageWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  background-color: #000000;
+  max-width: 90vw;
+  max-height: calc(90vh - 48px);
+}
+
+.lightboxImage {
+  max-width: 90vw;
+  max-height: calc(90vh - 48px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 

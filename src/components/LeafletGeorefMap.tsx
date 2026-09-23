@@ -492,7 +492,13 @@ function RectangleDrawer({
       }
     },
     click(e) {
-      onMapClickRef.current(e);
+      if (isRelocatingRef.current && e.originalEvent) {
+        // Calculate true geographic coordinates from mouse position so it never snaps to marker centers
+        const trueLatLng = map.mouseEventToLatLng(e.originalEvent);
+        onMapClickRef.current({ ...e, latlng: trueLatLng });
+      } else {
+        onMapClickRef.current(e);
+      }
     },
   });
 
@@ -501,6 +507,7 @@ function RectangleDrawer({
   return activeBounds ? (
     <Rectangle
       bounds={activeBounds}
+      interactive={false}
       pathOptions={{
         color: "#4250af",
         weight: 2,
@@ -512,6 +519,56 @@ function RectangleDrawer({
   ) : null;
 }
 
+interface RelocationInteractivityControllerProps {
+  isRelocating: boolean;
+  images: ImageItem[];
+}
+
+function RelocationInteractivityController({
+  isRelocating,
+  images,
+}: RelocationInteractivityControllerProps) {
+  const map = useMap();
+
+  useEffect(() => {
+    map.eachLayer((layer: any) => {
+      const pathEl = (layer as { _path?: SVGElement })._path;
+      if (layer instanceof L.CircleMarker) {
+        layer.options.interactive = !isRelocating;
+        if (pathEl) {
+          if (isRelocating) {
+            pathEl.classList.remove("leaflet-interactive");
+            pathEl.style.pointerEvents = "none";
+          } else {
+            pathEl.classList.add("leaflet-interactive");
+            pathEl.style.pointerEvents = "";
+          }
+        }
+      } else if (layer instanceof L.Polyline) {
+        layer.options.interactive = false;
+        if (pathEl) {
+          pathEl.classList.remove("leaflet-interactive");
+          pathEl.style.pointerEvents = "none";
+        }
+      }
+    });
+
+    const container = map.getContainer();
+    if (isRelocating) {
+      map.closeTooltip();
+      container.classList.add("leaflet-crosshair");
+      const canvas = container.querySelector("canvas");
+      if (canvas) {
+        canvas.classList.remove("leaflet-interactive");
+      }
+    } else {
+      container.classList.remove("leaflet-crosshair");
+    }
+  }, [isRelocating, images, map]);
+
+  return null;
+}
+
 export default function LeafletGeorefMap(props: Props) {
   const [images, setImages] = useState<ImageItem[]>(props.images);
   const [selectedImage, setSelectedImage] = useState<MapDisplayItem | null>(null);
@@ -520,6 +577,19 @@ export default function LeafletGeorefMap(props: Props) {
   const [bounds, setBounds] = useState<LatLngBounds | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isImageEnlarged, setIsImageEnlarged] = useState(false);
+
+  // Close enlarged image modal on Escape key
+  useEffect(() => {
+    if (!isImageEnlarged) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsImageEnlarged(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isImageEnlarged]);
 
   // GPX Track state
   const [gpxTracks, setGpxTracks] = useState<GpxTrackMetadata[]>([]);
@@ -1254,6 +1324,7 @@ export default function LeafletGeorefMap(props: Props) {
         {continuousPolylinePositions.length >= 2 && (
           <Polyline
             positions={continuousPolylinePositions}
+            interactive={false}
             pathOptions={{
               color: "#4250af",
               weight: 3,
@@ -1297,7 +1368,7 @@ export default function LeafletGeorefMap(props: Props) {
                 },
               }}
             >
-              {(photoItems.length <= 1500 || isSelected) && (
+              {!isRelocating && (photoItems.length <= 1500 || isSelected) && (
                 <Tooltip direction="top" offset={[0, -6]}>
                   <span>{it.name}</span>
                 </Tooltip>
@@ -1306,6 +1377,10 @@ export default function LeafletGeorefMap(props: Props) {
           );
         })}
 
+        <RelocationInteractivityController
+          isRelocating={isRelocating}
+          images={images}
+        />
         <RectangleDrawer
           boxSelectMode={boxSelectMode}
           isRelocating={isRelocating}
@@ -1334,13 +1409,28 @@ export default function LeafletGeorefMap(props: Props) {
             </div>
             <button
               className={styles.closeBtn}
-              onClick={() => setSelectedImage(null)}
+              onClick={() => {
+                setSelectedImage(null);
+                setIsImageEnlarged(false);
+              }}
             >
               <X size={16} />
             </button>
           </div>
 
-          <div className={styles.cardImageHolder}>
+          <div
+            className={styles.cardImageHolder}
+            onClick={() => setIsImageEnlarged(true)}
+            role="button"
+            tabIndex={0}
+            title="Click to view large image"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setIsImageEnlarged(true);
+              }
+            }}
+          >
             <img
               src={`/api/images/${selectedImage.id}/thumbnail?size=preview${
                 props.sessionToken
@@ -1369,6 +1459,10 @@ export default function LeafletGeorefMap(props: Props) {
                   <span>Estimated</span>
                 </>
               )}
+            </div>
+            <div className={styles.expandHint}>
+              <Maximize2 size={13} />
+              <span>Enlarge</span>
             </div>
           </div>
 
@@ -1460,6 +1554,52 @@ export default function LeafletGeorefMap(props: Props) {
         onZoomToGpxTrack={handleZoomToGpxTrack}
         initialTab={activeModalTab}
       />
+
+      {/* Large Image Lightbox Modal */}
+      {isImageEnlarged && selectedImage && (
+        <div
+          className={styles.lightboxOverlay}
+          onClick={() => setIsImageEnlarged(false)}
+        >
+          <div
+            className={styles.lightboxContent}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={styles.lightboxHeader}>
+              <div className={styles.lightboxTitle}>
+                <span className={styles.lightboxName}>{selectedImage.name}</span>
+                <span className={styles.lightboxDate}>
+                  {new Date(selectedImage.timestamp).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </span>
+              </div>
+              <button
+                className={styles.lightboxCloseBtn}
+                onClick={() => setIsImageEnlarged(false)}
+                title="Close"
+                aria-label="Close large preview"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className={styles.lightboxImageWrapper}>
+              <img
+                src={`/api/images/${selectedImage.id}/thumbnail?size=preview${
+                  props.sessionToken
+                    ? `&token=${encodeURIComponent(props.sessionToken)}`
+                    : typeof window !== "undefined" && localStorage.getItem("geopic_session_token")
+                    ? `&token=${encodeURIComponent(localStorage.getItem("geopic_session_token")!)}`
+                    : ""
+                }`}
+                alt={selectedImage.name}
+                className={styles.lightboxImage}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
