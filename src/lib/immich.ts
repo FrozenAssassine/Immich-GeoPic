@@ -1,6 +1,7 @@
 export type ImmichAuth = {
   token?: string;
   apiKey?: string;
+  baseUrl?: string;
 };
 
 export type ImmichUser = {
@@ -29,8 +30,8 @@ export type ImmichAsset = {
   } | null;
 };
 
-export function getImmichUrl(): string {
-  let url = process.env.IMMICH_URL || "http://localhost:2283";
+export function getImmichUrl(customUrl?: string): string {
+  let url = customUrl || process.env.IMMICH_URL || "http://localhost:2283";
   url = url.trim().replace(/\/+$/, "");
   if (url.endsWith("/api")) {
     url = url.slice(0, -4).replace(/\/+$/, "");
@@ -53,11 +54,16 @@ export function getAuthHeaders(auth: ImmichAuth): Record<string, string> {
   return headers;
 }
 
-export async function loginToImmich(email: string, password: string): Promise<{
+export async function loginToImmich(
+  email: string,
+  password: string,
+  serverUrl?: string
+): Promise<{
   accessToken: string;
   user: ImmichUser;
+  immichUrl: string;
 }> {
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(serverUrl);
   let res: Response;
   const targetUrl = `${baseUrl}/api/auth/login`;
 
@@ -111,12 +117,13 @@ export async function loginToImmich(email: string, password: string): Promise<{
       profileImagePath: data.profileImagePath,
       isAdmin: !!data.isAdmin,
     },
+    immichUrl: baseUrl,
   };
 }
 
-export async function logoutFromImmich(token: string): Promise<void> {
+export async function logoutFromImmich(token: string, serverUrl?: string): Promise<void> {
   try {
-    const baseUrl = getImmichUrl();
+    const baseUrl = getImmichUrl(serverUrl);
     await fetch(`${baseUrl}/api/auth/logout`, {
       method: "POST",
       headers: {
@@ -129,7 +136,7 @@ export async function logoutFromImmich(token: string): Promise<void> {
 }
 
 export async function getCurrentUser(auth: ImmichAuth): Promise<ImmichUser> {
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(auth.baseUrl);
   const res = await fetch(`${baseUrl}/api/users/me`, {
     headers: getAuthHeaders(auth),
   });
@@ -155,7 +162,7 @@ export async function getProfileImageStream(
   body: ReadableStream<Uint8Array> | null;
   contentType: string;
 } | null> {
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(auth.baseUrl);
 
   let targetUserId = userId;
   if (!targetUserId || targetUserId === "apikey-user") {
@@ -215,7 +222,7 @@ export async function searchAssets(
     size?: number;
   }
 ): Promise<{ items: ImmichAsset[]; total: number }> {
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(auth.baseUrl);
   const pageSize = Math.min(params.size || 1000, 1000);
   const bodyPayload: Record<string, unknown> = {
     type: "IMAGE",
@@ -338,7 +345,7 @@ export async function getAssetThumbnailStream(
   body: ReadableStream<Uint8Array> | null;
   contentType: string;
 } | null> {
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(auth.baseUrl);
   const res = await fetch(`${baseUrl}/api/assets/${assetId}/thumbnail?size=${size}`, {
     headers: getAuthHeaders(auth),
   });
@@ -364,7 +371,7 @@ export async function updateAssetLocation(
     return;
   }
 
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(auth.baseUrl);
   const latitude = coords.lat;
   const longitude = coords.lng;
 
@@ -435,7 +442,7 @@ export async function updateAssetDateTime(
   assetId: string,
   dateTimeOriginal: string
 ): Promise<void> {
-  const baseUrl = getImmichUrl();
+  const baseUrl = getImmichUrl(auth.baseUrl);
 
   // Try bulk update endpoint PUT /api/assets first
   const bulkRes = await fetch(`${baseUrl}/api/assets`, {
@@ -484,7 +491,7 @@ export async function bulkUpdateDateTimes(
 
   if (allSameTime) {
     try {
-      const baseUrl = getImmichUrl();
+      const baseUrl = getImmichUrl(auth.baseUrl);
       const bulkRes = await fetch(`${baseUrl}/api/assets`, {
         method: "PUT",
         headers: {
