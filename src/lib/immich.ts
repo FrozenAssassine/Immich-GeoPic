@@ -375,7 +375,22 @@ export async function updateAssetLocation(
   const latitude = coords.lat;
   const longitude = coords.lng;
 
-  // Try bulk update endpoint PUT /api/assets first
+  // Direct single asset endpoint PUT /api/assets/:id is primary in Immich
+  const singleRes = await fetch(`${baseUrl}/api/assets/${assetId}`, {
+    method: "PUT",
+    headers: {
+      ...getAuthHeaders(auth),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      latitude,
+      longitude,
+    }),
+  });
+
+  if (singleRes.ok) return;
+
+  // Fallback to bulk update endpoint PUT /api/assets if needed
   const bulkRes = await fetch(`${baseUrl}/api/assets`, {
     method: "PUT",
     headers: {
@@ -389,22 +404,7 @@ export async function updateAssetLocation(
     }),
   });
 
-  if (bulkRes.ok) return;
-
-  // Fallback to single asset endpoint PUT /api/assets/:id
-  const singleRes = await fetch(`${baseUrl}/api/assets/${assetId}`, {
-    method: "PUT",
-    headers: {
-      ...getAuthHeaders(auth),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      latitude,
-      longitude,
-    }),
-  });
-
-  if (!singleRes.ok) {
+  if (!bulkRes.ok) {
     const errorText = await singleRes.text();
     throw new Error(`Failed to update asset location (${singleRes.status}): ${errorText}`);
   }
