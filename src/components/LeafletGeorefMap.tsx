@@ -19,7 +19,7 @@ import {
 } from "react-leaflet";
 import { ImageItem } from "@/types/ImageItem";
 import { GpxPoint, GpxTrackMetadata, GpxTrackWithPoints } from "@/types/GpxTrack";
-import { getTimezoneForCoords, resolvePhotoTimeMs } from "@/lib/timezone";
+import { getTimezoneForCoords, resolvePhotoTimeMs, formatPhotoDisplayDate } from "@/lib/timezone";
 import L from "leaflet";
 import {
   X,
@@ -2947,10 +2947,14 @@ export default function LeafletGeorefMap(props: Props) {
             <div className={styles.metaRow}>
               <Calendar size={14} />
               <span className={styles.metaValue}>
-                {new Date(selectedImage.timestamp).toLocaleString(undefined, {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                })}
+                {formatPhotoDisplayDate(
+                  selectedImage,
+                  {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  },
+                  appSettings.fallbackTimezone
+                )}
               </span>
               <button
                 type="button"
@@ -3185,10 +3189,14 @@ export default function LeafletGeorefMap(props: Props) {
               <div className={styles.lightboxTitle}>
                 <span className={styles.lightboxName}>{selectedImage.name}</span>
                 <span className={styles.lightboxDate}>
-                  {new Date(selectedImage.timestamp).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
+                  {formatPhotoDisplayDate(
+                    selectedImage,
+                    {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    },
+                    appSettings.fallbackTimezone
+                  )}
                 </span>
               </div>
               <button

@@ -248,3 +248,96 @@ export function resolvePhotoTimeMs(
   const parsed = Date.parse(trimmed);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
+
+export interface PhotoDisplayTimeParams {
+  timestamp: string;
+  localDateTime?: string | null;
+  timeZone?: string | null;
+  coords?: { lat: number; lng: number } | null;
+  estCoords?: { lat: number; lng: number } | null;
+  resolvedTime?: number | null;
+}
+
+/**
+ * Formats a photo's capture date and time for display in the UI.
+ *
+ * Rules:
+ * 1. The photo must always display in the local capture time (wall-clock time)
+ *    where the photo was taken (e.g. 08:20 if taken at 08:20), matching what
+ *    the camera and Immich UI display.
+ * 2. If the photo has a naive localDateTime string (e.g. "2026-06-26 08:20:16"
+ *    or "2026-06-26T08:20:16"), that represents the local wall-clock time directly.
+ *    We format these date components without browser timezone shifts.
+ * 3. If localDateTime is not available, but the photo has a resolvedTime (or timestamp)
+ *    and a known timezone (from coords, EXIF timezone, or fallback/GPX timezone):
+ *    Format the UTC instant in that target timezone.
+ * 4. Fallback: Parse the timestamp and format using toLocaleString.
+ */
+export function formatPhotoDisplayDate(
+  photo: PhotoDisplayTimeParams,
+  options: Intl.DateTimeFormatOptions = {
+    dateStyle: "medium",
+    timeStyle: "short",
+  },
+  fallbackTimezone?: string | null,
+  locale?: string
+): string {
+  if (!photo) return "";
+
+  // 1. If photo has a localDateTime string, it is the authoritative wall-clock time from EXIF / Immich
+  if (photo.localDateTime && typeof photo.localDateTime === "string") {
+    const trimmed = photo.localDateTime.trim();
+    const match = trimmed.match(/^(\d{4})[-:/](\d{2})[-:/](\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      const hour = parseInt(match[4], 10);
+      const minute = parseInt(match[5], 10);
+      const second = parseInt(match[6], 10);
+      // Construct a Date with local components matching the wall-clock time
+      const localDate = new Date(year, month, day, hour, minute, second);
+      if (!Number.isNaN(localDate.getTime())) {
+        return localDate.toLocaleString(locale, options);
+      }
+    }
+  }
+
+  // 2. If resolvedTime is available and we know the target timezone (coords, exif, or fallback)
+  const coords = photo.coords || photo.estCoords;
+  let targetTz: string | null = null;
+  if (photo.timeZone && !photo.timeZone.startsWith("+") && !photo.timeZone.startsWith("-")) {
+    targetTz = photo.timeZone;
+  } else if (coords && typeof coords.lat === "number" && typeof coords.lng === "number") {
+    targetTz = getTimezoneForCoords(coords.lat, coords.lng);
+  } else if (fallbackTimezone) {
+    targetTz = fallbackTimezone;
+  }
+
+  if (targetTz) {
+    const instantMs =
+      typeof photo.resolvedTime === "number" && !Number.isNaN(photo.resolvedTime)
+        ? photo.resolvedTime
+        : Date.parse(photo.timestamp);
+    if (!Number.isNaN(instantMs)) {
+      try {
+        return new Intl.DateTimeFormat(locale, { ...options, timeZone: targetTz }).format(
+          new Date(instantMs)
+        );
+      } catch {
+        // Fall through on invalid timezone
+      }
+    }
+  }
+
+  // 3. Fallback: Parse timestamp directly
+  if (photo.timestamp) {
+    const d = new Date(photo.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleString(locale, options);
+    }
+    return photo.timestamp;
+  }
+
+  return "";
+}
