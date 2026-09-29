@@ -231,17 +231,27 @@ export async function searchAssets(
     page: params.page || 1,
   };
 
-  if (params.startDate) {
-    const isoString = params.startDate.includes("T")
-      ? new Date(params.startDate).toISOString()
-      : new Date(`${params.startDate}T00:00:00.000Z`).toISOString();
-    bodyPayload.takenAfter = isoString;
+  if (params.startDate && params.startDate.trim() !== "") {
+    const raw = params.startDate.includes("T") ? params.startDate.split("T")[0] : params.startDate.trim();
+    const startDateObj = new Date(`${raw}T00:00:00.000Z`);
+    if (!Number.isNaN(startDateObj.getTime())) {
+      // Buffer 24h earlier in UTC to capture photos taken across timezones (up to UTC+14)
+      startDateObj.setDate(startDateObj.getDate() - 1);
+      bodyPayload.takenAfter = startDateObj.toISOString();
+    } else {
+      bodyPayload.takenAfter = new Date(params.startDate).toISOString();
+    }
   }
-  if (params.endDate) {
-    const isoString = params.endDate.includes("T")
-      ? new Date(params.endDate).toISOString()
-      : new Date(`${params.endDate}T23:59:59.999Z`).toISOString();
-    bodyPayload.takenBefore = isoString;
+  if (params.endDate && params.endDate.trim() !== "") {
+    const raw = params.endDate.includes("T") ? params.endDate.split("T")[0] : params.endDate.trim();
+    const endDateObj = new Date(`${raw}T23:59:59.999Z`);
+    if (!Number.isNaN(endDateObj.getTime())) {
+      // Buffer 24h later in UTC to capture photos taken across timezones (down to UTC-12)
+      endDateObj.setDate(endDateObj.getDate() + 1);
+      bodyPayload.takenBefore = endDateObj.toISOString();
+    } else {
+      bodyPayload.takenBefore = new Date(params.endDate).toISOString();
+    }
   }
 
   const res = await fetch(`${baseUrl}/api/search/metadata`, {
